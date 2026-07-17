@@ -1,12 +1,10 @@
-# Verification
+# PackPilot v0.4.0 驗證紀錄
 
-PackPilot v0.2.0-alpha.3
-
-Verified locally:
-
-- `npm ci --no-audit --no-fund` succeeded using public npm registry URLs
-- `npm run lint` succeeded with 0 warnings and 0 errors
-- `npm run build` succeeded
-- PWA service worker generated successfully
-
-Important fix: all `package-lock.json` package URLs now point to `https://registry.npmjs.org/` rather than an internal build environment.
+- `npm run lint`：0 警告、0 錯誤
+- `npm run build`：成功
+- Vite：8.1.5
+- PWA Service Worker：成功產生
+- GitHub Pages base：`/packpilot-new/`
+- PWA start_url：`/packpilot-new/`
+- PWA scope：`/packpilot-new/`
+- LocalStorage schema：v4，包含舊版資料轉換

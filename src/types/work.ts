@@ -19,8 +19,9 @@ export type WorkStage =
   | 'ready-for-hallway'
   | 'moving-hallway'
   | 'system-use'
-  | 'completed'
-export type WorkStatus = 'working' | 'paused' | 'waiting' | 'completed'
+
+export type StageStatus = 'not-started' | 'working' | 'paused' | 'completed' | 'skipped'
+export type WorkStatus = 'active' | 'waiting' | 'completed' | 'cancelled'
 export type InterruptionReason =
   | 'arrival'
   | 'inventory-occupied'
@@ -31,17 +32,21 @@ export type InterruptionReason =
   | 'break'
   | 'other'
 
-export interface WorkSession {
+export interface TimeSession {
   id: string
-  stage: WorkStage
   startedAt: string
   endedAt?: string
   source: TrackingMode
 }
 
-export interface StageTimestamp {
+export interface StageRecord {
   stage: WorkStage
-  enteredAt: string
+  status: StageStatus
+  workerName: string
+  trackingMode: TrackingMode
+  sessions: TimeSession[]
+  completedAt?: string
+  note?: string
 }
 
 export interface WorkItem {
@@ -51,27 +56,32 @@ export interface WorkItem {
   sequence: number
   deliveryType: DeliveryType
   orderCount: number
-  workerName: string
-  trackingMode: TrackingMode
-  stage: WorkStage
-  status: WorkStatus
   note: string
   createdAt: string
   updatedAt: string
   completedAt?: string
-  sessions: WorkSession[]
-  stageTimeline: StageTimestamp[]
+  cancelledAt?: string
+  status: WorkStatus
+  stages: StageRecord[]
 }
 
 export interface InterruptionRecord {
   id: string
   workId: string
   workName: string
+  stage: WorkStage
   reason: InterruptionReason
   note: string
-  pausedStage: WorkStage
   createdAt: string
   resumedAt?: string
+}
+
+export interface AuditRecord {
+  id: string
+  workId: string
+  happenedAt: string
+  action: string
+  detail: string
 }
 
 export interface AddWorkInput {
@@ -82,4 +92,11 @@ export interface AddWorkInput {
   trackingMode: TrackingMode
   note: string
   startedAt?: string
+}
+
+export interface UpdateWorkInput {
+  channelId: ChannelId
+  deliveryType: DeliveryType
+  orderCount: number
+  note: string
 }

@@ -2,219 +2,248 @@ import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import type {
   AddWorkInput,
+  AuditRecord,
   ChannelId,
   InterruptionReason,
   InterruptionRecord,
+  StageRecord,
+  TrackingMode,
+  UpdateWorkInput,
   WorkItem,
-  WorkSession,
   WorkStage,
 } from '../types/work'
 
 interface PackPilotState {
-  schemaVersion: 3
+  schemaVersion: 4
   works: WorkItem[]
   interruptions: InterruptionRecord[]
+  audits: AuditRecord[]
   channelCounters: Record<ChannelId, number>
   addWork: (input: AddWorkInput) => void
-  advanceWork: (workId: string, happenedAt?: string) => void
-  interruptWork: (workId: string, reason: InterruptionReason, note: string) => void
-  resumeWork: (workId: string) => void
-  startFulfillment: (workId: string, happenedAt?: string) => void
-  completeWork: (workId: string, happenedAt?: string) => void
-  updateOrderCount: (workId: string, orderCount: number) => void
+  startStage: (workId: string, stage: WorkStage, workerName: string, mode: TrackingMode, happenedAt?: string) => void
+  completeStage: (workId: string, stage: WorkStage, happenedAt?: string) => void
+  pauseStage: (workId: string, stage: WorkStage, reason: InterruptionReason, note: string) => void
+  resumeStage: (workId: string, stage: WorkStage) => void
+  editStage: (workId: string, stage: WorkStage, workerName: string, mode: TrackingMode, startedAt?: string, endedAt?: string) => void
+  skipStage: (workId: string, stage: WorkStage) => void
+  updateWork: (workId: string, input: UpdateWorkInput) => void
+  cancelWork: (workId: string) => void
+  restoreWork: (workId: string) => void
+  deleteWork: (workId: string) => void
+  duplicateWork: (workId: string) => void
   resetAll: () => void
 }
 
 export const channelNames: Record<ChannelId, string> = {
-  shopee: '蝦皮',
-  preorder: '預購',
-  myship: '賣貨便',
-  'boss-note': '老闆記事本',
-  ojisan: '歐吉桑',
-  ichibansan: '一番桑',
-  'inventory-system': '庫存系統',
-  other: '其他',
+  shopee: '蝦皮', preorder: '預購', myship: '賣貨便', 'boss-note': '老闆記事本',
+  ojisan: '歐吉桑', ichibansan: '一番桑', 'inventory-system': '庫存系統', other: '其他',
 }
 
+export const stageOrder: WorkStage[] = ['picking', 'sorting', 'packing', 'ready-to-ship', 'shipping']
+
 const initialCounters: Record<ChannelId, number> = {
-  shopee: 0,
-  preorder: 0,
-  myship: 0,
-  'boss-note': 0,
-  ojisan: 0,
-  ichibansan: 0,
-  'inventory-system': 0,
-  other: 0,
+  shopee: 0, preorder: 0, myship: 0, 'boss-note': 0, ojisan: 0, ichibansan: 0,
+  'inventory-system': 0, other: 0,
 }
 
 const now = () => new Date().toISOString()
-const id = () => crypto.randomUUID()
+const uid = () => crypto.randomUUID()
 const safeTime = (value?: string) => value && !Number.isNaN(Date.parse(value)) ? new Date(value).toISOString() : now()
-const startSession = (stage: WorkStage, source: WorkItem['trackingMode'], startedAt = now()): WorkSession => ({ id: id(), stage, startedAt, source })
+const audit = (workId: string, action: string, detail: string): AuditRecord => ({ id: uid(), workId, happenedAt: now(), action, detail })
 
-const closeOpenSession = (work: WorkItem, endedAt = now()): WorkItem => ({
-  ...work,
-  sessions: work.sessions.map((session) => (session.endedAt ? session : { ...session, endedAt })),
+const makeStage = (stage: WorkStage): StageRecord => ({
+  stage, status: 'not-started', workerName: '', trackingMode: 'manual', sessions: [],
 })
 
-const pauseAutomaticPersonalWork = (works: WorkItem[], exceptId?: string): WorkItem[] => {
-  const timestamp = now()
-  return works.map((work) => {
-    if (work.id === exceptId || work.status !== 'working' || work.trackingMode !== 'automatic' || work.workerName !== '我') return work
-    return { ...closeOpenSession(work, timestamp), status: 'paused', updatedAt: timestamp }
-  })
+const stagesFor = (channelId: ChannelId, deliveryType: WorkItem['deliveryType']): StageRecord[] => {
+  if (channelId === 'inventory-system') return [makeStage('system-use')]
+  return deliveryType === 'home-delivery'
+    ? [makeStage('picking'), makeStage('sorting'), makeStage('packing'), makeStage('ready-for-hallway'), makeStage('moving-hallway')]
+    : [makeStage('picking'), makeStage('sorting'), makeStage('packing'), makeStage('ready-to-ship'), makeStage('shipping')]
 }
 
-const nextWorkStage = (work: WorkItem): WorkStage | null => {
-  if (work.stage === 'system-use') return 'completed'
-  if (work.stage === 'picking') return 'sorting'
-  if (work.stage === 'sorting') return 'packing'
-  if (work.stage === 'packing') return work.deliveryType === 'convenience-store' ? 'ready-to-ship' : 'ready-for-hallway'
-  return null
-}
+const closeStage = (stage: StageRecord, endedAt: string): StageRecord => ({
+  ...stage,
+  sessions: stage.sessions.map((session) => session.endedAt ? session : { ...session, endedAt }),
+})
 
-const normalizeWork = (raw: Partial<WorkItem>): WorkItem => {
-  const createdAt = raw.createdAt ?? now()
-  const channelId = raw.channelId ?? 'other'
-  const deliveryType = channelId === 'inventory-system' ? 'internal' : (raw.deliveryType ?? 'convenience-store')
-  const trackingMode = raw.trackingMode ?? 'automatic'
-  const stage = raw.stage ?? (channelId === 'inventory-system' ? 'system-use' : 'picking')
-  return {
-    id: raw.id ?? id(),
-    channelId,
-    displayName: raw.displayName ?? channelNames[channelId],
-    sequence: raw.sequence ?? 1,
-    deliveryType,
-    orderCount: Number.isFinite(raw.orderCount) ? Math.max(0, Number(raw.orderCount)) : 0,
-    workerName: raw.workerName ?? '我',
-    trackingMode,
-    stage,
-    status: raw.status ?? 'working',
-    note: raw.note ?? '',
-    createdAt,
-    updatedAt: raw.updatedAt ?? createdAt,
-    completedAt: raw.completedAt,
-    sessions: Array.isArray(raw.sessions) ? raw.sessions.map((session) => ({ ...session, source: session.source ?? trackingMode })) : [],
-    stageTimeline: Array.isArray(raw.stageTimeline) ? raw.stageTimeline : [{ stage, enteredAt: createdAt }],
+const deriveWork = (work: WorkItem): WorkItem => {
+  if (work.cancelledAt) return { ...work, status: 'cancelled' }
+  const allDone = work.stages.every((stage) => stage.status === 'completed' || stage.status === 'skipped')
+  if (allDone) {
+    const latest = work.stages.map((s) => s.completedAt).filter(Boolean).sort().at(-1) ?? work.updatedAt
+    return { ...work, status: 'completed', completedAt: work.completedAt ?? latest }
   }
+  const coreDone = work.stages.filter((s) => ['picking', 'sorting', 'packing'].includes(s.stage)).every((s) => s.status === 'completed' || s.status === 'skipped')
+  const anyActive = work.stages.some((s) => s.status === 'working' || s.status === 'paused')
+  return { ...work, status: coreDone && !anyActive ? 'waiting' : 'active', completedAt: undefined }
+}
+
+const pauseOtherPersonalStages = (works: WorkItem[], exceptWorkId: string, exceptStage: WorkStage, timestamp: string) =>
+  works.map((work) => deriveWork({
+    ...work,
+    stages: work.stages.map((stage) => {
+      if (work.id === exceptWorkId && stage.stage === exceptStage) return stage
+      if (stage.status !== 'working' || stage.trackingMode !== 'automatic' || stage.workerName !== '我') return stage
+      return { ...closeStage(stage, timestamp), status: 'paused' }
+    }),
+  }))
+
+const normalizeOldWork = (raw: any): WorkItem => {
+  if (Array.isArray(raw.stages)) return deriveWork(raw as WorkItem)
+  const channelId: ChannelId = raw.channelId ?? 'other'
+  const deliveryType = channelId === 'inventory-system' ? 'internal' : (raw.deliveryType ?? 'convenience-store')
+  const stages = stagesFor(channelId, deliveryType)
+  for (const session of raw.sessions ?? []) {
+    const target = stages.find((s) => s.stage === session.stage)
+    if (target) {
+      target.workerName = raw.workerName ?? '我'
+      target.trackingMode = session.source ?? raw.trackingMode ?? 'automatic'
+      target.sessions.push({ id: session.id ?? uid(), startedAt: session.startedAt, endedAt: session.endedAt, source: session.source ?? raw.trackingMode ?? 'automatic' })
+      target.status = session.endedAt ? 'completed' : raw.status === 'paused' ? 'paused' : 'working'
+      if (session.endedAt) target.completedAt = session.endedAt
+    }
+  }
+  return deriveWork({
+    id: raw.id ?? uid(), channelId, displayName: raw.displayName ?? channelNames[channelId], sequence: raw.sequence ?? 1,
+    deliveryType, orderCount: raw.orderCount ?? 0, note: raw.note ?? '', createdAt: raw.createdAt ?? now(),
+    updatedAt: raw.updatedAt ?? raw.createdAt ?? now(), completedAt: raw.completedAt, status: 'active', stages,
+  })
 }
 
 export const usePackPilotStore = create<PackPilotState>()(
   persist(
     (set, get) => ({
-      schemaVersion: 3,
-      works: [],
-      interruptions: [],
-      channelCounters: initialCounters,
+      schemaVersion: 4,
+      works: [], interruptions: [], audits: [], channelCounters: initialCounters,
 
       addWork: (input) => {
         const state = get()
         const timestamp = safeTime(input.startedAt)
         const sequence = (state.channelCounters[input.channelId] ?? 0) + 1
-        const baseName = channelNames[input.channelId]
-        const stage: WorkStage = input.channelId === 'inventory-system' ? 'system-use' : 'picking'
-        const deliveryType = input.channelId === 'inventory-system' ? 'internal' : input.deliveryType
-        const work: WorkItem = {
-          id: id(),
-          channelId: input.channelId,
-          displayName: sequence === 1 ? baseName : `${baseName}（${sequence}）`,
-          sequence,
-          deliveryType,
-          orderCount: input.channelId === 'inventory-system' ? 0 : Math.max(0, Math.floor(input.orderCount)),
-          workerName: input.workerName.trim() || '未指定',
-          trackingMode: input.trackingMode,
-          stage,
-          status: 'working',
-          note: input.note.trim(),
-          createdAt: timestamp,
-          updatedAt: timestamp,
-          sessions: [startSession(stage, input.trackingMode, timestamp)],
-          stageTimeline: [{ stage, enteredAt: timestamp }],
-        }
-        const existing = input.trackingMode === 'automatic' && work.workerName === '我' ? pauseAutomaticPersonalWork(state.works) : state.works
-        set({ works: [work, ...existing], channelCounters: { ...state.channelCounters, [input.channelId]: sequence } })
+        const deliveryType = input.channelId === 'inventory-system' ? 'internal' : input.channelId === 'myship' ? 'convenience-store' : input.deliveryType
+        const stages = stagesFor(input.channelId, deliveryType)
+        const first = stages[0]
+        first.status = 'working'; first.workerName = input.workerName.trim() || '未指定'; first.trackingMode = input.trackingMode
+        first.sessions = [{ id: uid(), startedAt: timestamp, source: input.trackingMode }]
+        let works = state.works
+        if (input.trackingMode === 'automatic' && first.workerName === '我') works = pauseOtherPersonalStages(works, '', first.stage, timestamp)
+        const base = channelNames[input.channelId]
+        const work = deriveWork({
+          id: uid(), channelId: input.channelId, displayName: sequence === 1 ? base : `${base}（${sequence}）`, sequence,
+          deliveryType, orderCount: input.channelId === 'inventory-system' ? 0 : Math.max(0, Math.floor(input.orderCount)),
+          note: input.note.trim(), createdAt: timestamp, updatedAt: timestamp, status: 'active', stages,
+        })
+        set({ works: [work, ...works], channelCounters: { ...state.channelCounters, [input.channelId]: sequence }, audits: [audit(work.id, '建立工作', `${work.displayName}，${first.workerName}`), ...state.audits] })
       },
 
-      advanceWork: (workId, happenedAt) => {
+      startStage: (workId, stageName, workerName, mode, happenedAt) => {
+        const timestamp = safeTime(happenedAt)
+        set((state) => {
+          let works = state.works
+          if (mode === 'automatic' && workerName.trim() === '我') works = pauseOtherPersonalStages(works, workId, stageName, timestamp)
+          works = works.map((work) => work.id !== workId ? work : deriveWork({
+            ...work, updatedAt: timestamp,
+            stages: work.stages.map((stage) => stage.stage !== stageName ? stage : ({
+              ...stage, status: 'working', workerName: workerName.trim() || '未指定', trackingMode: mode,
+              sessions: [...stage.sessions, { id: uid(), startedAt: timestamp, source: mode }], completedAt: undefined,
+            })),
+          }))
+          return { works, audits: [audit(workId, '開始階段', `${stageName}，${workerName}`), ...state.audits] }
+        })
+      },
+
+      completeStage: (workId, stageName, happenedAt) => {
         const timestamp = safeTime(happenedAt)
         set((state) => ({
-          works: state.works.map((work) => {
-            if (work.id !== workId || work.status !== 'working') return work
-            const nextStage = nextWorkStage(work)
-            if (!nextStage) return work
-            const closed = closeOpenSession(work, timestamp)
-            if (nextStage === 'completed') return { ...closed, stage: 'completed', status: 'completed', completedAt: timestamp, updatedAt: timestamp, stageTimeline: [...closed.stageTimeline, { stage: 'completed', enteredAt: timestamp }] }
-            const waiting = nextStage === 'ready-to-ship' || nextStage === 'ready-for-hallway'
-            return {
-              ...closed,
-              stage: nextStage,
-              status: waiting ? 'waiting' : 'working',
-              updatedAt: timestamp,
-              sessions: waiting ? closed.sessions : [...closed.sessions, startSession(nextStage, work.trackingMode, timestamp)],
-              stageTimeline: [...closed.stageTimeline, { stage: nextStage, enteredAt: timestamp }],
-            }
-          }),
+          works: state.works.map((work) => work.id !== workId ? work : deriveWork({
+            ...work, updatedAt: timestamp,
+            stages: work.stages.map((stage) => stage.stage !== stageName ? stage : ({ ...closeStage(stage, timestamp), status: 'completed', completedAt: timestamp })),
+          })),
+          interruptions: state.interruptions.map((i) => i.workId === workId && i.stage === stageName && !i.resumedAt ? { ...i, resumedAt: timestamp } : i),
+          audits: [audit(workId, '完成階段', stageName), ...state.audits],
         }))
       },
 
-      interruptWork: (workId, reason, note) => {
-        const work = get().works.find((item) => item.id === workId)
-        if (!work || work.status !== 'working') return
+      pauseStage: (workId, stageName, reason, note) => {
         const timestamp = now()
-        const record: InterruptionRecord = { id: id(), workId, workName: work.displayName, reason, note: note.trim(), pausedStage: work.stage, createdAt: timestamp }
+        const work = get().works.find((w) => w.id === workId)
+        if (!work) return
         set((state) => ({
-          works: state.works.map((item) => item.id === workId ? { ...closeOpenSession(item, timestamp), status: 'paused', updatedAt: timestamp } : item),
-          interruptions: [record, ...state.interruptions],
+          works: state.works.map((w) => w.id !== workId ? w : deriveWork({ ...w, updatedAt: timestamp, stages: w.stages.map((s) => s.stage !== stageName ? s : ({ ...closeStage(s, timestamp), status: 'paused' })) })),
+          interruptions: [{ id: uid(), workId, workName: work.displayName, stage: stageName, reason, note: note.trim(), createdAt: timestamp }, ...state.interruptions],
+          audits: [audit(workId, '暫停階段', `${stageName}，${reason}`), ...state.audits],
         }))
       },
 
-      resumeWork: (workId) => {
+      resumeStage: (workId, stageName) => {
         const timestamp = now()
+        const work = get().works.find((w) => w.id === workId)
+        const stage = work?.stages.find((s) => s.stage === stageName)
+        if (!work || !stage) return
+        set((state) => {
+          let works = state.works
+          if (stage.trackingMode === 'automatic' && stage.workerName === '我') works = pauseOtherPersonalStages(works, workId, stageName, timestamp)
+          return {
+            works: works.map((w) => w.id !== workId ? w : deriveWork({ ...w, updatedAt: timestamp, stages: w.stages.map((s) => s.stage !== stageName ? s : ({ ...s, status: 'working', sessions: [...s.sessions, { id: uid(), startedAt: timestamp, source: s.trackingMode }] })) })),
+            interruptions: state.interruptions.map((i) => i.workId === workId && i.stage === stageName && !i.resumedAt ? { ...i, resumedAt: timestamp } : i),
+            audits: [audit(workId, '恢復階段', stageName), ...state.audits],
+          }
+        })
+      },
+
+      editStage: (workId, stageName, workerName, mode, startedAt, endedAt) => {
+        const start = startedAt ? safeTime(startedAt) : undefined
+        const end = endedAt ? safeTime(endedAt) : undefined
         set((state) => ({
-          works: pauseAutomaticPersonalWork(state.works, workId).map((work) => work.id === workId ? { ...work, status: 'working', updatedAt: timestamp, sessions: [...work.sessions, startSession(work.stage, work.trackingMode, timestamp)] } : work),
-          interruptions: state.interruptions.map((record) => record.workId === workId && !record.resumedAt ? { ...record, resumedAt: timestamp } : record),
+          works: state.works.map((work) => work.id !== workId ? work : deriveWork({
+            ...work, updatedAt: now(), stages: work.stages.map((stage) => {
+              if (stage.stage !== stageName) return stage
+              const sessions = start ? [{ id: uid(), startedAt: start, endedAt: end, source: mode }] : stage.sessions
+              return { ...stage, workerName: workerName.trim() || '未指定', trackingMode: mode, sessions, status: end ? 'completed' : start ? 'working' : stage.status, completedAt: end }
+            }),
+          })),
+          audits: [audit(workId, '修改階段', `${stageName} 時間／執行者`), ...state.audits],
         }))
       },
 
-      startFulfillment: (workId, happenedAt) => {
-        const timestamp = safeTime(happenedAt)
-        set((state) => ({
-          works: state.works.map((work) => {
-            if (work.id !== workId || work.status !== 'waiting') return work
-            const stage: WorkStage = work.stage === 'ready-to-ship' ? 'shipping' : 'moving-hallway'
-            return { ...work, stage, status: 'working', updatedAt: timestamp, sessions: [...work.sessions, startSession(stage, work.trackingMode, timestamp)], stageTimeline: [...work.stageTimeline, { stage, enteredAt: timestamp }] }
-          }),
-        }))
-      },
+      skipStage: (workId, stageName) => set((state) => ({
+        works: state.works.map((work) => work.id !== workId ? work : deriveWork({ ...work, updatedAt: now(), stages: work.stages.map((s) => s.stage === stageName ? ({ ...closeStage(s, now()), status: 'skipped', completedAt: now() }) : s) })),
+        audits: [audit(workId, '略過階段', stageName), ...state.audits],
+      })),
 
-      completeWork: (workId, happenedAt) => {
-        const timestamp = safeTime(happenedAt)
-        set((state) => ({
-          works: state.works.map((work) => {
-            if (work.id !== workId || work.status === 'completed') return work
-            const closed = closeOpenSession(work, timestamp)
-            return { ...closed, stage: 'completed', status: 'completed', completedAt: timestamp, updatedAt: timestamp, stageTimeline: [...closed.stageTimeline, { stage: 'completed', enteredAt: timestamp }] }
-          }),
-        }))
-      },
+      updateWork: (workId, input) => set((state) => ({
+        works: state.works.map((work) => {
+          if (work.id !== workId) return work
+          const channelId = input.channelId
+          const deliveryType = channelId === 'inventory-system' ? 'internal' : channelId === 'myship' ? 'convenience-store' : input.deliveryType
+          const oldStageMap = new Map(work.stages.map((s) => [s.stage, s]))
+          const stages = stagesFor(channelId, deliveryType).map((s) => oldStageMap.get(s.stage) ?? s)
+          return deriveWork({ ...work, channelId, deliveryType, displayName: work.sequence === 1 ? channelNames[channelId] : `${channelNames[channelId]}（${work.sequence}）`, orderCount: Math.max(0, Math.floor(input.orderCount)), note: input.note.trim(), stages, updatedAt: now() })
+        }),
+        audits: [audit(workId, '編輯工作', '通路、配送、單數或備註'), ...state.audits],
+      })),
 
-      updateOrderCount: (workId, orderCount) => set((state) => ({ works: state.works.map((work) => work.id === workId ? { ...work, orderCount: Math.max(0, Math.floor(orderCount)), updatedAt: now() } : work) })),
-      resetAll: () => set({ works: [], interruptions: [], channelCounters: initialCounters }),
+      cancelWork: (workId) => set((state) => ({ works: state.works.map((w) => w.id === workId ? deriveWork({ ...w, cancelledAt: now(), updatedAt: now(), stages: w.stages.map((s) => closeStage(s, now())) }) : w), audits: [audit(workId, '取消工作', '已封存為取消'), ...state.audits] })),
+      restoreWork: (workId) => set((state) => ({ works: state.works.map((w) => w.id === workId ? deriveWork({ ...w, cancelledAt: undefined, updatedAt: now() }) : w), audits: [audit(workId, '恢復工作', '取消狀態已復原'), ...state.audits] })),
+      deleteWork: (workId) => set((state) => ({ works: state.works.filter((w) => w.id !== workId), interruptions: state.interruptions.filter((i) => i.workId !== workId), audits: state.audits.filter((a) => a.workId !== workId) })),
+      duplicateWork: (workId) => {
+        const source = get().works.find((w) => w.id === workId)
+        if (!source) return
+        const state = get(); const sequence = (state.channelCounters[source.channelId] ?? 0) + 1; const timestamp = now()
+        const stages = stagesFor(source.channelId, source.deliveryType)
+        const copy: WorkItem = { ...source, id: uid(), sequence, displayName: `${channelNames[source.channelId]}（${sequence}）`, createdAt: timestamp, updatedAt: timestamp, completedAt: undefined, cancelledAt: undefined, status: 'active', stages }
+        set({ works: [copy, ...state.works], channelCounters: { ...state.channelCounters, [source.channelId]: sequence }, audits: [audit(copy.id, '複製工作', `來源：${source.displayName}`), ...state.audits] })
+      },
+      resetAll: () => set({ works: [], interruptions: [], audits: [], channelCounters: initialCounters }),
     }),
     {
-      name: 'packpilot-data',
-      version: 3,
-      storage: createJSONStorage(() => localStorage),
+      name: 'packpilot-data', version: 4, storage: createJSONStorage(() => localStorage),
       migrate: (persisted) => {
-        const old = persisted as Partial<PackPilotState>
-        return {
-          schemaVersion: 3,
-          works: Array.isArray(old.works) ? old.works.map(normalizeWork) : [],
-          interruptions: Array.isArray(old.interruptions) ? old.interruptions : [],
-          channelCounters: { ...initialCounters, ...(old.channelCounters ?? {}) },
-        }
+        const old = persisted as any
+        return { schemaVersion: 4, works: Array.isArray(old?.works) ? old.works.map(normalizeOldWork) : [], interruptions: old?.interruptions ?? [], audits: old?.audits ?? [], channelCounters: { ...initialCounters, ...(old?.channelCounters ?? {}) } }
       },
-      partialize: (state) => ({ schemaVersion: state.schemaVersion, works: state.works, interruptions: state.interruptions, channelCounters: state.channelCounters }),
+      partialize: (state) => ({ schemaVersion: state.schemaVersion, works: state.works, interruptions: state.interruptions, audits: state.audits, channelCounters: state.channelCounters }),
     },
   ),
 )
