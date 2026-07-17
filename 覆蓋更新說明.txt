@@ -1,4 +1,4 @@
-PackPilot v0.5.1 Trial 2 覆蓋更新方式
+PackPilot v0.5.2 Trial 3 覆蓋更新方式
 
 1. 解壓縮本 ZIP。
 2. 在原 GitHub 專案資料夾中保留 .git 資料夾。
@@ -6,4 +6,5 @@ PackPilot v0.5.1 Trial 2 覆蓋更新方式
 4. 使用 GitHub Desktop Commit，再 Push origin。
 5. 等待 GitHub Actions 完成部署。
 
-此版本沿用 packpilot-data-v5-trial，並自動遷移舊試作資料。
+此版本沿用 packpilot-data-v5-trial，並自動將舊試作資料遷移到 schema 7。
+到貨計時為當日工時事件，不會跨日接續。

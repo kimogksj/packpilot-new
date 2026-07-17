@@ -1,21 +1,7 @@
-# PackPilot v0.2.0-alpha.2
+# PackPilot
 
-Mobile-first personal work-state tracker for warehouse packing work.
+手機優先的訂單處理、物流、跨日接續、工作日誌與工作回報工具。
 
-## Local development
+目前版本：v0.5.2 Trial 3
 
-```bash
-npm install
-npm run dev
-```
-
-## Verification
-
-```bash
-npm run lint
-npm run build
-```
-
-## Deployment
-
-Push to the `main` branch. The included GitHub Actions workflow builds the Vite app and deploys `dist` to GitHub Pages.
+本版本新增簡易「處理到貨」快速計時，並修正寄貨／搬運完成後的整筆工作完成判定。

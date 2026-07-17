@@ -1,7 +1,7 @@
 {
   "name": "packpilot-new",
   "private": true,
-  "version": "0.5.1-trial.2",
+  "version": "0.5.2-trial.3",
   "type": "module",
   "scripts": {
     "dev": "vite",

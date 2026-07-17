@@ -1,10 +1,11 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
-import type { AddWorkInput, AuditRecord, ChannelId, StageRecord, StageTimeInput, TrackingMode, WorkItem, WorkStage, WorkdayRecord } from '../types/work'
+import type { AddWorkInput, AuditRecord, ChannelId, InboundSession, StageRecord, StageTimeInput, TrackingMode, WorkItem, WorkStage, WorkdayRecord } from '../types/work'
 
 interface State {
-  schemaVersion: 6
+  schemaVersion: 7
   works: WorkItem[]
+  inboundSessions: InboundSession[]
   workdays: WorkdayRecord[]
   audits: AuditRecord[]
   counters: Record<ChannelId, number>
@@ -16,6 +17,8 @@ interface State {
   updateStageTime: (workId: string, stage: WorkStage, input: StageTimeInput) => void
   suspendWork: (workId: string) => void
   resumeWork: (workId: string) => void
+  startInbound: () => void
+  completeInbound: () => void
   endWorkday: () => void
   cancelWork: (workId: string) => void
   deleteWork: (workId: string) => void
@@ -41,8 +44,8 @@ const close = (stage: StageRecord, at: string) => ({ ...stage, sessions: stage.s
 const derive = (w: WorkItem): WorkItem => {
   if (w.cancelledAt) return { ...w, status: 'cancelled' }
   if (w.status === 'suspended') return w
-  const last = w.stages.at(-1)
-  if (last && (last.status === 'completed' || last.status === 'skipped')) return { ...w, status: 'completed', completedAt: w.completedAt ?? last.completedAt }
+  const finalStage = w.stages.find(s => ['shipping', 'moving-hallway', 'system-use'].includes(s.stage))
+  if (finalStage && (finalStage.status === 'completed' || finalStage.status === 'skipped')) return { ...w, status: 'completed', completedAt: w.completedAt ?? finalStage.completedAt ?? w.updatedAt }
   if (w.stages.some(s => s.stage === 'waiting-logistics' && s.status === 'waiting')) return { ...w, status: 'waiting' }
   return { ...w, status: 'active', completedAt: undefined }
 }
@@ -60,7 +63,7 @@ const jobCodeFor = (date: string, works: WorkItem[]) => {
 }
 
 export const usePackPilotStore = create<State>()(persist((set, get) => ({
-  schemaVersion: 6, works: [], workdays: [{ date: dayKey() }], audits: [], counters: initialCounters,
+  schemaVersion: 7, works: [], inboundSessions: [], workdays: [{ date: dayKey() }], audits: [], counters: initialCounters,
   addWork: (input) => {
     const state = get(); const at = iso(); const date = dayKey(); const sequence = (state.counters[input.channelId] ?? 0) + 1
     const delivery = input.channelId === 'inventory-system' ? 'internal' : input.channelId === 'myship' ? 'convenience-store' : input.deliveryType
@@ -106,21 +109,45 @@ export const usePackPilotStore = create<State>()(persist((set, get) => ({
     if (w.id !== workId || w.status !== 'suspended') return w
     const at = iso(); return derive({ ...w, status: 'active', updatedAt: at, currentWorkday: dayKey(), suspensions: w.suspensions.map((s, i) => i === w.suspensions.length - 1 && !s.resumedAt ? { ...s, resumedAt: at, toWorkday: dayKey() } : s) })
   }), audits: [audit(workId, '接續工作', `接續至 ${dayKey()}`), ...state.audits] })),
+  startInbound: () => {
+    const state = get()
+    if (state.inboundSessions.some(s => !s.endedAt)) return
+    const at = iso()
+    const pausedWorkIds: string[] = []
+    const works = state.works.map(w => {
+      let changed = false
+      const stages = w.stages.map(s => {
+        if (s.status === 'working' && s.leadWorker === '韋') { changed = true; return { ...close(s, at), status: 'paused' as const }
+        }
+        return s
+      })
+      if (changed) pausedWorkIds.push(w.id)
+      return changed ? derive({ ...w, updatedAt: at, stages }) : w
+    })
+    const session: InboundSession = { id: uid(), startedAt: at, worker: '韋' }
+    const pauseAudits = pausedWorkIds.map(id => audit(id, '暫停階段', '開始處理到貨，同一位執行者的自動計時已暫停'))
+    set({ works, inboundSessions: [session, ...state.inboundSessions], audits: [audit('inbound', '開始處理到貨', '韋'), ...pauseAudits, ...state.audits] })
+  },
+  completeInbound: () => {
+    const state = get(); const at = iso()
+    if (!state.inboundSessions.some(s => !s.endedAt)) return
+    set({ inboundSessions: state.inboundSessions.map(s => !s.endedAt ? { ...s, endedAt: at } : s), audits: [audit('inbound', '完成處理到貨', '本次到貨工時計時結束'), ...state.audits] })
+  },
   endWorkday: () => {
     const state = get(); const at = iso(); const date = dayKey()
-    set({ works: state.works.map(w => {
+    set({ inboundSessions: state.inboundSessions.map(s => !s.endedAt ? { ...s, endedAt: at } : s), works: state.works.map(w => {
       if (w.currentWorkday !== date || ['completed','cancelled','suspended'].includes(w.status)) return w
       return { ...w, status: 'suspended' as const, updatedAt: at, stages: w.stages.map(s => s.status === 'working' ? { ...close(s, at), status: 'paused' as const } : s), suspensions: [...w.suspensions, { id: uid(), startedAt: at, fromWorkday: date }] }
     }), workdays: state.workdays.some(d => d.date === date) ? state.workdays.map(d => d.date === date ? { ...d, closedAt: at } : d) : [{ date, closedAt: at }, ...state.workdays], audits: [audit('workday', '結束工作日', date), ...state.audits] })
   },
   cancelWork: (workId) => set(state => ({ works: state.works.map(w => w.id === workId ? { ...w, cancelledAt: iso(), status: 'cancelled' } : w), audits: [audit(workId, '取消工作', '標記為取消／異常'), ...state.audits] })),
   deleteWork: (workId) => set(state => ({ works: state.works.filter(w => w.id !== workId), audits: state.audits.filter(a => a.workId !== workId) })),
-  resetAll: () => set({ works: [], workdays: [{ date: dayKey() }], audits: [], counters: initialCounters }),
+  resetAll: () => set({ works: [], inboundSessions: [], workdays: [{ date: dayKey() }], audits: [], counters: initialCounters }),
 }), {
-  name: 'packpilot-data-v5-trial', version: 6, storage: createJSONStorage(() => localStorage),
+  name: 'packpilot-data-v5-trial', version: 7, storage: createJSONStorage(() => localStorage),
   migrate: (persisted: unknown) => {
     const old = persisted as Partial<State>
-    return { ...old, schemaVersion: 6, works: (old.works ?? []).map((w, i) => ({ ...w, jobCode: w.jobCode ?? `PP-${w.originWorkday.replaceAll('-', '')}-${String(i + 1).padStart(3, '0')}` })) } as State
+    return { ...old, schemaVersion: 7, inboundSessions: old.inboundSessions ?? [], works: (old.works ?? []).map((w, i) => ({ ...w, jobCode: w.jobCode ?? `PP-${w.originWorkday.replaceAll('-', '')}-${String(i + 1).padStart(3, '0')}` })) } as State
   },
-  partialize: s => ({ schemaVersion: s.schemaVersion, works: s.works, workdays: s.workdays, audits: s.audits, counters: s.counters }),
+  partialize: s => ({ schemaVersion: s.schemaVersion, works: s.works, inboundSessions: s.inboundSessions, workdays: s.workdays, audits: s.audits, counters: s.counters }),
 }))

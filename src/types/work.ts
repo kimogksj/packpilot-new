@@ -35,6 +35,12 @@ export interface WorkItem {
   stages: StageRecord[]
   suspensions: SuspensionRecord[]
 }
+export interface InboundSession {
+  id: string
+  startedAt: string
+  endedAt?: string
+  worker: string
+}
 export interface WorkdayRecord { date: string; closedAt?: string; reopenedAt?: string }
 export interface AuditRecord { id: string; workId: string; happenedAt: string; action: string; detail: string }
 export interface AddWorkInput { channelId: ChannelId; deliveryType: DeliveryType; orderCount: number; leadWorker: string; helpers: string[]; note: string }
