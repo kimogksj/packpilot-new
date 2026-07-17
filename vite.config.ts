@@ -16,13 +16,20 @@ export default defineConfig({
         theme_color: '#09111f',
         background_color: '#09111f',
         display: 'standalone',
-        start_url: '/packpilot/',
-        scope: '/packpilot/',
+        start_url: '/packpilot-new/',
+        scope: '/packpilot-new/',
         icons: [
-          { src: 'icons/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' },
+          {
+            src: 'icons/icon.svg',
+            sizes: 'any',
+            type: 'image/svg+xml',
+            purpose: 'any maskable',
+          },
         ],
       },
-      workbox: { globPatterns: ['**/*.{js,css,html,svg,webmanifest}'] },
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,svg,webmanifest}'],
+      },
     }),
   ],
 })
