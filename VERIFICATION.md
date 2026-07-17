@@ -1,18 +1,12 @@
-# Verification report
+# Verification
 
-Version: 0.2.0-alpha.2
+PackPilot v0.2.0-alpha.3
 
-Validated in a clean directory with:
+Verified locally:
 
-- `npm ci --no-audit --no-fund`
-- `npm run lint`
-- `npm run build`
-- `npm audit --omit=dev --audit-level=high`
+- `npm ci --no-audit --no-fund` succeeded using public npm registry URLs
+- `npm run lint` succeeded with 0 warnings and 0 errors
+- `npm run build` succeeded
+- PWA service worker generated successfully
 
-Result:
-
-- TypeScript build passed
-- Lint passed with 0 warnings and 0 errors
-- Vite production build passed
-- PWA service worker generated
-- Production dependency audit found 0 vulnerabilities
+Important fix: all `package-lock.json` package URLs now point to `https://registry.npmjs.org/` rather than an internal build environment.
