@@ -1,0 +1,22 @@
+PackPilot v0.3.0 現場看板（packpilot-new 修正版）
+
+更新方式：
+1. 先關閉 GitHub Desktop 中正在檢視的變更頁面。
+2. 將本壓縮檔解壓縮。
+3. 把解壓後的所有檔案與資料夾複製到你目前的 packpilot-new 專案資料夾。
+4. 選擇覆蓋同名檔案。
+5. 不要刪除或覆蓋原專案中的 .git 資料夾。
+6. 回到 GitHub Desktop，確認 Changes 中有檔案變更。
+7. Commit to main，再按 Push origin。
+8. 到 GitHub 網站的 Actions 頁面，等待 Deploy PackPilot to GitHub Pages 顯示綠色勾勾。
+
+本版本已固定：
+- vite.config.ts base = /packpilot-new/
+- PWA start_url = /packpilot-new/
+- PWA scope = /packpilot-new/
+- GitHub Actions 自動安裝與建置，因此本機不需要 Node.js、VS Code 或 npm 指令。
+
+網站網址：
+https://kimogksj.github.io/packpilot-new/
+
+若頁面仍顯示舊版本，請先使用無痕視窗開啟，或清除該網站的快取與已安裝的舊 PWA。
