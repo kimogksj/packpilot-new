@@ -1,228 +1,55 @@
-import { useEffect, useMemo, useState } from 'react'
-import {
-  ArchiveRestore, Check, ChevronDown, Copy, Edit3, MoreVertical,
-  Pause, Play, Plus, RotateCcw, SkipForward, TimerReset, Trash2, Users, X,
-} from 'lucide-react'
-import { channelNames, usePackPilotStore } from './store/usePackPilotStore'
-import type { ChannelId, DeliveryType, InterruptionReason, StageRecord, TrackingMode, WorkItem, WorkStage } from './types/work'
+import { useEffect, useState } from 'react'
+import { CalendarDays, Check, ChevronDown, ClipboardList, Clock3, Copy, LogOut, Pause, Play, Plus, RotateCcw, Trash2 } from 'lucide-react'
+import { channelNames, dayKey, usePackPilotStore, workers } from './store/usePackPilotStore'
+import type { ChannelId, DeliveryType, StageRecord, WorkItem, WorkStage } from './types/work'
 import './styles.css'
 
-const channels: { id: ChannelId; label: string }[] = Object.entries(channelNames).map(([id, label]) => ({ id: id as ChannelId, label }))
-const stageLabels: Record<WorkStage, string> = {
-  picking: '撿貨', sorting: '分貨', packing: '包貨', 'ready-to-ship': '等待寄貨', shipping: '寄貨',
-  'ready-for-hallway': '等待搬到走廊', 'moving-hallway': '搬到走廊', 'system-use': '使用庫存系統',
-}
-const interruptionLabels: Record<InterruptionReason, string> = {
-  arrival: '到貨', 'inventory-occupied': '庫存系統被占用', 'waiting-colleague': '等待同事完成',
-  'support-other-work': '支援其他工作', 'manager-request': '主管交辦', 'other-department': '其他部門拿貨',
-  break: '休息', other: '其他',
-}
-const coreStages = new Set<WorkStage>(['picking', 'sorting', 'packing', 'system-use'])
+const channels = Object.entries(channelNames).map(([id, label]) => ({ id: id as ChannelId, label }))
+const labels: Record<WorkStage, string> = { picking: '撿貨', sorting: '分貨', packing: '包貨', 'waiting-logistics': '等待寄貨／搬運', shipping: '寄貨', 'moving-hallway': '搬到走廊', 'system-use': '庫存系統作業' }
+const coreStages: WorkStage[] = ['picking','sorting','packing']
+const logisticsStages: WorkStage[] = ['shipping','moving-hallway']
+const fmt = (ms: number) => { const min = Math.max(0, Math.floor(ms / 60000)); return min < 60 ? `${min} 分` : `${Math.floor(min/60)} 小時 ${min%60} 分` }
+const sessionMs = (s: StageRecord, now: number) => s.stage === 'waiting-logistics' ? 0 : s.sessions.reduce((sum, x) => sum + (Date.parse(x.endedAt ?? new Date(now).toISOString()) - Date.parse(x.startedAt)), 0)
+const waitingMs = (s: StageRecord, now: number) => s.stage !== 'waiting-logistics' ? 0 : s.sessions.reduce((sum, x) => sum + (Date.parse(x.endedAt ?? new Date(now).toISOString()) - Date.parse(x.startedAt)), 0)
+const useClock = () => { const [n,setN] = useState(Date.now()); useEffect(() => { const id=setInterval(()=>setN(Date.now()),1000); return()=>clearInterval(id)},[]); return n }
 
-const toLocalInput = (iso?: string) => {
-  const date = iso ? new Date(iso) : new Date()
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
-  return local.toISOString().slice(0, 16)
-}
-const formatDuration = (ms: number) => {
-  const totalMinutes = Math.max(0, Math.floor(ms / 60000))
-  const hours = Math.floor(totalMinutes / 60)
-  const minutes = totalMinutes % 60
-  return hours ? `${hours} 小時 ${minutes} 分` : `${minutes} 分`
-}
-const stageMs = (stage: StageRecord, nowMs: number) => stage.sessions.reduce((sum, session) => {
-  const end = session.endedAt ? new Date(session.endedAt).getTime() : nowMs
-  return sum + Math.max(0, end - new Date(session.startedAt).getTime())
-}, 0)
-const workOperationMs = (work: WorkItem, nowMs: number) => work.stages.filter((s) => coreStages.has(s.stage)).reduce((sum, stage) => sum + stageMs(stage, nowMs), 0)
-const workSpanMs = (work: WorkItem, nowMs: number) => {
-  const starts = work.stages.flatMap((s) => s.sessions.map((x) => new Date(x.startedAt).getTime()))
-  if (!starts.length) return 0
-  const ends = work.stages.flatMap((s) => s.sessions.map((x) => x.endedAt ? new Date(x.endedAt).getTime() : nowMs))
-  return Math.max(...ends) - Math.min(...starts)
+function WorkerPicker({ lead, setLead, helpers, setHelpers, single=false }: { lead:string; setLead:(v:string)=>void; helpers:string[]; setHelpers:(v:string[])=>void; single?:boolean }) {
+  return <div className="worker-box"><label>主要執行者<select value={lead} onChange={e=>{setLead(e.target.value);setHelpers(helpers.filter(x=>x!==e.target.value))}}>{workers.map(w=><option key={w}>{w}</option>)}</select></label>{!single&&<div><small>協助人員</small><div className="chips">{workers.filter(w=>w!==lead).map(w=><button type="button" key={w} className={helpers.includes(w)?'chip active':'chip'} onClick={()=>setHelpers(helpers.includes(w)?helpers.filter(x=>x!==w):[...helpers,w])}>{w}</button>)}</div></div>}</div>
 }
 
-function useClock() {
-  const [nowMs, setNowMs] = useState(Date.now())
-  useEffect(() => { const timer = window.setInterval(() => setNowMs(Date.now()), 1000); return () => window.clearInterval(timer) }, [])
-  return nowMs
+function StageRow({ work, stage, now }: { work:WorkItem; stage:StageRecord; now:number }) {
+  const startStage=usePackPilotStore(s=>s.startStage), complete=usePackPilotStore(s=>s.completeStage), pause=usePackPilotStore(s=>s.pauseStage), resume=usePackPilotStore(s=>s.resumeStage)
+  const [open,setOpen]=useState(false), [lead,setLead]=useState(stage.leadWorker||'韋'), [helpers,setHelpers]=useState(stage.helpers)
+  const isWait=stage.stage==='waiting-logistics'; const duration=isWait?waitingMs(stage,now):sessionMs(stage,now)
+  const logisticsStart = isWait && stage.status==='waiting'
+  const nextStage = work.deliveryType==='home-delivery'?'moving-hallway':'shipping'
+  if (isWait) return <div className="stage-row waiting-row"><div><strong>{labels[stage.stage]}</strong><span>自動狀態 · 不計入效率</span></div><b>{stage.status==='waiting'?fmt(duration):'尚未進入'}</b>{logisticsStart&&<button className="primary small" onClick={()=>{setOpen(true)}}><Play size={16}/>開始{labels[nextStage]}</button>}{open&&<div className="inline-editor"><WorkerPicker lead={lead} setLead={setLead} helpers={helpers} setHelpers={setHelpers}/><button className="primary" onClick={()=>{startStage(work.id,nextStage,lead,helpers);setOpen(false)}}>開始物流計時</button></div>}</div>
+  return <div className={`stage-row status-${stage.status}`}><div><strong>{labels[stage.stage]}</strong><span>{stage.leadWorker?`主要：${stage.leadWorker}${stage.helpers.length?` · 協助：${stage.helpers.join('、')}`:''}`:'尚未指定'}</span></div><b>{fmt(duration)}</b><div className="stage-actions">{stage.status==='not-started'&&<button onClick={()=>setOpen(!open)}><Play size={16}/>開始</button>}{stage.status==='working'&&<><button onClick={()=>pause(work.id,stage.stage)}><Pause size={16}/>暫停</button><button className="done" onClick={()=>complete(work.id,stage.stage)}><Check size={16}/>完成</button></>}{stage.status==='paused'&&<button onClick={()=>resume(work.id,stage.stage)}><Play size={16}/>恢復</button>}{stage.status==='completed'&&<span className="done-label">已完成</span>}</div>{open&&<div className="inline-editor"><WorkerPicker lead={lead} setLead={setLead} helpers={helpers} setHelpers={setHelpers} single={stage.stage==='sorting'}/><button className="primary" onClick={()=>{startStage(work.id,stage.stage,lead,helpers);setOpen(false)}}>開始計時</button></div>}</div>
 }
 
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
-  return <div className="modal-backdrop" onClick={onClose}><div className="modal" onClick={(e) => e.stopPropagation()}><div className="modal-head"><h3>{title}</h3><button className="icon-button" onClick={onClose}><X size={20} /></button></div>{children}</div></div>
+function WorkCard({ work, now }: { work:WorkItem; now:number }) {
+  const resumeWork=usePackPilotStore(s=>s.resumeWork), suspend=usePackPilotStore(s=>s.suspendWork), cancel=usePackPilotStore(s=>s.cancelWork), del=usePackPilotStore(s=>s.deleteWork)
+  const [open,setOpen]=useState(true)
+  const core=work.stages.filter(s=>coreStages.includes(s.stage)).reduce((n,s)=>n+sessionMs(s,now),0), logistics=work.stages.filter(s=>logisticsStages.includes(s.stage)).reduce((n,s)=>n+sessionMs(s,now),0), waiting=work.stages.reduce((n,s)=>n+waitingMs(s,now),0)
+  return <article className={`work-card ${work.status}`}><header><button className="card-title" onClick={()=>setOpen(!open)}><div><strong>{work.displayName}</strong><span>{work.orderCount} 單 · {work.deliveryType==='home-delivery'?'宅配':work.deliveryType==='internal'?'內部':'超商'} · 建立 {work.originWorkday}</span></div><ChevronDown className={open?'rotated':''}/></button><div className="status-pill">{work.status==='suspended'?'跨日待續':work.status==='waiting'?'等待物流':work.status==='completed'?'已完成':work.status==='cancelled'?'已取消':'進行中'}</div></header><div className="metrics"><span>核心作業 <b>{fmt(core)}</b></span><span>物流 <b>{fmt(logistics)}</b></span><span>等待 <b>{fmt(waiting)}</b></span></div>{work.status==='suspended'&&<div className="handoff"><div><strong>昨日擱置工作</strong><span>從目前進度接續，擱置時間不計入效率。</span></div><button className="primary" onClick={()=>resumeWork(work.id)}><Play size={16}/>接續工作</button></div>}{open&&<div className="stage-list">{work.stages.map(s=><StageRow key={s.stage} work={work} stage={s} now={now}/>)}</div>}<footer><button onClick={()=>suspend(work.id)} disabled={['completed','cancelled','suspended'].includes(work.status)}><Clock3 size={15}/>擱置到下個工作日</button><button onClick={()=>cancel(work.id)}><LogOut size={15}/>取消</button><button className="danger" onClick={()=>window.confirm('永久刪除？')&&del(work.id)}><Trash2 size={15}/>刪除</button></footer></article>
 }
 
-function StageRow({ work, stage, nowMs }: { work: WorkItem; stage: StageRecord; nowMs: number }) {
-  const startStage = usePackPilotStore((s) => s.startStage)
-  const completeStage = usePackPilotStore((s) => s.completeStage)
-  const pauseStage = usePackPilotStore((s) => s.pauseStage)
-  const resumeStage = usePackPilotStore((s) => s.resumeStage)
-  const editStage = usePackPilotStore((s) => s.editStage)
-  const skipStage = usePackPilotStore((s) => s.skipStage)
-  const [editOpen, setEditOpen] = useState(false)
-  const [interruptOpen, setInterruptOpen] = useState(false)
-  const [worker, setWorker] = useState(stage.workerName || '我')
-  const [mode, setMode] = useState<TrackingMode>(stage.trackingMode || 'automatic')
-  const firstSession = stage.sessions[0]
-  const lastSession = stage.sessions.at(-1)
-  const [startAt, setStartAt] = useState(toLocalInput(firstSession?.startedAt))
-  const [endAt, setEndAt] = useState(lastSession?.endedAt ? toLocalInput(lastSession.endedAt) : '')
-  const [reason, setReason] = useState<InterruptionReason>('waiting-colleague')
-  const [reasonNote, setReasonNote] = useState('')
-  const isWaitingMarker = stage.stage === 'ready-to-ship' || stage.stage === 'ready-for-hallway'
-  const duration = isWaitingMarker ? 0 : stageMs(stage, nowMs)
-
-  const begin = () => {
-    const manual = mode === 'manual'
-    startStage(work.id, stage.stage, worker, mode, manual ? new Date(startAt).toISOString() : undefined)
-  }
-
-  return <div className={`stage-row stage-${stage.status}`}>
-    <div className="stage-main">
-      <div className="stage-icon">{stage.status === 'completed' ? <Check size={17} /> : stage.status === 'working' ? <Play size={16} /> : stage.status === 'paused' ? <Pause size={16} /> : stage.status === 'skipped' ? <SkipForward size={16} /> : <span />}</div>
-      <div><strong>{stageLabels[stage.stage]}</strong><span>{stage.workerName || '尚未指定'} · {stage.status === 'not-started' ? '未開始' : stage.status === 'working' ? '進行中' : stage.status === 'paused' ? '已暫停' : stage.status === 'completed' ? '已完成' : '已略過'}</span></div>
-    </div>
-    <div className="stage-time"><strong>{isWaitingMarker ? '不計時' : formatDuration(duration)}</strong>{stage.completedAt && <span>{new Date(stage.completedAt).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })}</span>}</div>
-    <div className="stage-actions">
-      {stage.status === 'not-started' && !isWaitingMarker && <button className="primary small" onClick={() => setEditOpen(true)}>開始</button>}
-      {stage.status === 'not-started' && isWaitingMarker && <button className="secondary small" onClick={() => completeStage(work.id, stage.stage)}>標記等待</button>}
-      {stage.status === 'working' && <><button className="primary small" onClick={() => completeStage(work.id, stage.stage)}>完成</button><button className="secondary small" onClick={() => setInterruptOpen(true)}>暫停</button></>}
-      {stage.status === 'paused' && <button className="primary small" onClick={() => resumeStage(work.id, stage.stage)}>繼續</button>}
-      <button className="icon-button mini" title="修改階段" onClick={() => setEditOpen(true)}><Edit3 size={16} /></button>
-      {stage.status !== 'completed' && stage.status !== 'skipped' && <button className="icon-button mini" title="略過階段" onClick={() => window.confirm(`略過「${stageLabels[stage.stage]}」？`) && skipStage(work.id, stage.stage)}><SkipForward size={16} /></button>}
-    </div>
-
-    {editOpen && <Modal title={`設定：${stageLabels[stage.stage]}`} onClose={() => setEditOpen(false)}>
-      <div className="form-grid">
-        <label>執行者<input value={worker} onChange={(e) => setWorker(e.target.value)} /></label>
-        <label>計時方式<select value={mode} onChange={(e) => setMode(e.target.value as TrackingMode)}><option value="automatic">我的工作，自動計時</option><option value="manual">同事工作，手動時間</option></select></label>
-        <label>開始時間<input type="datetime-local" value={startAt} onChange={(e) => setStartAt(e.target.value)} /></label>
-        <label>完成時間（可留空）<input type="datetime-local" value={endAt} onChange={(e) => setEndAt(e.target.value)} /></label>
-      </div>
-      <div className="modal-actions">
-        {stage.status === 'not-started' && <button className="primary" onClick={() => { begin(); setEditOpen(false) }}>開始此階段</button>}
-        <button className="secondary" onClick={() => { editStage(work.id, stage.stage, worker, mode, startAt ? new Date(startAt).toISOString() : undefined, endAt ? new Date(endAt).toISOString() : undefined); setEditOpen(false) }}>儲存修改</button>
-      </div>
-    </Modal>}
-
-    {interruptOpen && <Modal title="暫停原因" onClose={() => setInterruptOpen(false)}>
-      <label>原因<select value={reason} onChange={(e) => setReason(e.target.value as InterruptionReason)}>{Object.entries(interruptionLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-      <label>備註<input value={reasonNote} onChange={(e) => setReasonNote(e.target.value)} placeholder="例如：等待同事分出下一箱" /></label>
-      <button className="danger" onClick={() => { pauseStage(work.id, stage.stage, reason, reasonNote); setInterruptOpen(false); setReasonNote('') }}>確認暫停</button>
-    </Modal>}
-  </div>
-}
-
-function WorkCard({ work, nowMs }: { work: WorkItem; nowMs: number }) {
-  const updateWork = usePackPilotStore((s) => s.updateWork)
-  const duplicateWork = usePackPilotStore((s) => s.duplicateWork)
-  const cancelWork = usePackPilotStore((s) => s.cancelWork)
-  const restoreWork = usePackPilotStore((s) => s.restoreWork)
-  const deleteWork = usePackPilotStore((s) => s.deleteWork)
-  const [expanded, setExpanded] = useState(work.status === 'active')
-  const [menuOpen, setMenuOpen] = useState(false)
-  const [editOpen, setEditOpen] = useState(false)
-  const [channel, setChannel] = useState<ChannelId>(work.channelId)
-  const [delivery, setDelivery] = useState<DeliveryType>(work.deliveryType)
-  const [orders, setOrders] = useState(String(work.orderCount))
-  const [note, setNote] = useState(work.note)
-  const operationMs = workOperationMs(work, nowMs)
-  const spanMs = workSpanMs(work, nowMs)
-  const activeStages = work.stages.filter((s) => s.status === 'working').length
-
-  return <article className={`work-card work-${work.status}`}>
-    <div className="work-head">
-      <button className="work-expand" onClick={() => setExpanded((v) => !v)}>
-        <div><span className="status-dot" /><div><strong>{work.displayName}</strong><span>{work.deliveryType === 'convenience-store' ? '超商' : work.deliveryType === 'home-delivery' ? '宅配' : '內部作業'} · {work.orderCount} 單</span></div></div>
-        <ChevronDown className={expanded ? 'rotated' : ''} size={20} />
-      </button>
-      <div className="work-metrics"><div><small>作業時間</small><strong>{formatDuration(operationMs)}</strong></div><div><small>流程跨度</small><strong>{formatDuration(spanMs)}</strong></div><div><small>同時進行</small><strong>{activeStages}</strong></div></div>
-      <button className="icon-button" onClick={() => setMenuOpen((v) => !v)}><MoreVertical size={20} /></button>
-      {menuOpen && <div className="popover-menu">
-        <button onClick={() => { setEditOpen(true); setMenuOpen(false) }}><Edit3 size={16} /> 編輯工作</button>
-        <button onClick={() => { duplicateWork(work.id); setMenuOpen(false) }}><Copy size={16} /> 複製工作</button>
-        {work.status === 'cancelled' ? <button onClick={() => restoreWork(work.id)}><ArchiveRestore size={16} /> 恢復工作</button> : <button onClick={() => window.confirm('將此工作標示為取消？') && cancelWork(work.id)}><ArchiveRestore size={16} /> 取消／封存</button>}
-        <button className="danger-text" onClick={() => window.confirm('永久刪除此工作與相關紀錄？') && deleteWork(work.id)}><Trash2 size={16} /> 刪除工作</button>
-      </div>}
-    </div>
-    {work.note && <p className="work-note">{work.note}</p>}
-    {expanded && <div className="stage-list">{work.stages.map((stage) => <StageRow key={stage.stage} work={work} stage={stage} nowMs={nowMs} />)}</div>}
-
-    {editOpen && <Modal title={`編輯：${work.displayName}`} onClose={() => setEditOpen(false)}>
-      <div className="form-grid">
-        <label>通路<select value={channel} onChange={(e) => { const value = e.target.value as ChannelId; setChannel(value); if (value === 'myship') setDelivery('convenience-store') }}>{channels.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}</select></label>
-        <label>配送<select value={delivery} disabled={channel === 'myship' || channel === 'inventory-system'} onChange={(e) => setDelivery(e.target.value as DeliveryType)}><option value="convenience-store">超商</option><option value="home-delivery">宅配</option><option value="internal">內部</option></select></label>
-        <label>單數<input type="number" min="0" value={orders} onChange={(e) => setOrders(e.target.value)} /></label>
-        <label className="full-row">備註<input value={note} onChange={(e) => setNote(e.target.value)} /></label>
-      </div>
-      <button className="primary" onClick={() => { updateWork(work.id, { channelId: channel, deliveryType: delivery, orderCount: Number(orders) || 0, note }); setEditOpen(false) }}>儲存修改</button>
-    </Modal>}
-  </article>
-}
-
-function Section({ title, works, nowMs, empty }: { title: string; works: WorkItem[]; nowMs: number; empty: string }) {
-  return <section><div className="section-title"><h2>{title}</h2><span>{works.length}</span></div><div className="stack">{works.length ? works.map((w) => <WorkCard key={w.id} work={w} nowMs={nowMs} />) : <div className="empty">{empty}</div>}</div></section>
-}
-
-export default function App() {
-  const works = usePackPilotStore((s) => s.works)
-  const interruptions = usePackPilotStore((s) => s.interruptions)
-  const audits = usePackPilotStore((s) => s.audits)
-  const addWork = usePackPilotStore((s) => s.addWork)
-  const resetAll = usePackPilotStore((s) => s.resetAll)
-  const nowMs = useClock()
-  const [formOpen, setFormOpen] = useState(false)
-  const [channel, setChannel] = useState<ChannelId>('shopee')
-  const [delivery, setDelivery] = useState<DeliveryType>('convenience-store')
-  const [mode, setMode] = useState<TrackingMode>('automatic')
-  const [worker, setWorker] = useState('我')
-  const [orders, setOrders] = useState('1')
-  const [startedAt, setStartedAt] = useState(toLocalInput())
-  const [note, setNote] = useState('')
-
-  const active = useMemo(() => works.filter((w) => w.status === 'active'), [works])
-  const waiting = useMemo(() => works.filter((w) => w.status === 'waiting'), [works])
-  const cancelled = useMemo(() => works.filter((w) => w.status === 'cancelled'), [works])
-  const completedToday = useMemo(() => works.filter((w) => w.status === 'completed' && w.completedAt && new Date(w.completedAt).toDateString() === new Date(nowMs).toDateString()), [works, nowMs])
-  const totalOrders = completedToday.reduce((sum, w) => sum + w.orderCount, 0)
-  const totalOperation = completedToday.reduce((sum, w) => sum + workOperationMs(w, nowMs), 0)
-  const efficiency = totalOperation > 0 ? totalOrders / (totalOperation / 3600000) : 0
-
-  const submit = () => {
-    addWork({ channelId: channel, deliveryType: channel === 'myship' ? 'convenience-store' : channel === 'inventory-system' ? 'internal' : delivery, orderCount: Number(orders) || 0, workerName: worker, trackingMode: mode, note, startedAt: mode === 'manual' ? new Date(startedAt).toISOString() : undefined })
-    setNote(''); setFormOpen(false)
-  }
-
-  return <main className="app-shell">
-    <header className="hero"><div><p className="eyebrow">PACKPILOT · V0.4 PIPELINE</p><h1>多人並行、階段重疊，時間不再被排成一條直線。</h1><p>撿貨、分貨、包貨各自計時。等待寄貨完全切離作業時間，工作也能隨時修改或刪除。</p></div><button className="icon-button" title="清除所有資料" onClick={() => window.confirm('確定清除所有 PackPilot 資料？') && resetAll()}><RotateCcw size={20} /></button></header>
-
-    <section className="summary-grid">
-      <div className="summary-card"><small>現場進行中</small><strong>{active.length}</strong><span>個通路</span></div>
-      <div className="summary-card"><small>今日完成</small><strong>{totalOrders}</strong><span>{completedToday.length} 批</span></div>
-      <div className="summary-card"><small>總作業時間</small><strong>{formatDuration(totalOperation)}</strong><span>只計撿貨、分貨、包貨</span></div>
-      <div className="summary-card"><small>平均效率</small><strong>{efficiency.toFixed(1)}</strong><span>單／小時</span></div>
-    </section>
-
-    <button className="new-work" onClick={() => setFormOpen((v) => !v)}><Plus size={22} /> 新增現場工作</button>
-    {formOpen && <section className="create-panel">
-      <div className="mode-switch"><button className={mode === 'automatic' ? 'active' : ''} onClick={() => { setMode('automatic'); setWorker('我') }}><TimerReset size={18} /> 我的工作，自動計時</button><button className={mode === 'manual' ? 'active' : ''} onClick={() => setMode('manual')}><Users size={18} /> 同事工作，手動補登</button></div>
-      <label>通路／資源<select value={channel} onChange={(e) => { const v = e.target.value as ChannelId; setChannel(v); if (v === 'myship') setDelivery('convenience-store') }}>{channels.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}</select></label>
-      <label>第一階段執行者<input value={worker} onChange={(e) => setWorker(e.target.value)} /></label>
-      {channel !== 'inventory-system' && <label>配送<select value={delivery} disabled={channel === 'myship'} onChange={(e) => setDelivery(e.target.value as DeliveryType)}><option value="convenience-store">超商</option><option value="home-delivery">宅配</option></select></label>}
-      {channel !== 'inventory-system' && <label>單數<input type="number" min="0" value={orders} onChange={(e) => setOrders(e.target.value)} /></label>}
-      {mode === 'manual' && <label>實際開始時間<input type="datetime-local" value={startedAt} onChange={(e) => setStartedAt(e.target.value)} /></label>}
-      <label className="full-row">備註<input value={note} onChange={(e) => setNote(e.target.value)} placeholder="例如：同事 A 先撿貨，我稍後接包貨" /></label>
-      <button className="primary full-row" onClick={submit}>建立並開始撿貨</button>
-    </section>}
-
-    <Section title="現場流水線" works={active} nowMs={nowMs} empty="目前沒有進行中的工作" />
-    <Section title="作業已完成，等待物流" works={waiting} nowMs={nowMs} empty="沒有等待寄貨或搬運的工作" />
-    <Section title="今日已完成" works={completedToday} nowMs={nowMs} empty="今天尚無完成紀錄" />
-    {cancelled.length > 0 && <Section title="已取消／封存" works={cancelled} nowMs={nowMs} empty="" />}
-
-    <section className="two-column">
-      <div><div className="section-title"><h2>最近中斷</h2><span>{interruptions.length}</span></div><div className="timeline">{interruptions.slice(0, 8).map((item) => <div className="timeline-item" key={item.id}><strong>{item.workName} · {stageLabels[item.stage]}</strong><span>{interruptionLabels[item.reason]}</span>{item.note && <small>{item.note}</small>}<small>{new Date(item.createdAt).toLocaleString('zh-TW')} {item.resumedAt ? '· 已恢復' : '· 尚未恢復'}</small></div>)}{!interruptions.length && <div className="empty">尚無中斷紀錄</div>}</div></div>
-      <div><div className="section-title"><h2>修改歷程</h2><span>{audits.length}</span></div><div className="timeline">{audits.slice(0, 8).map((item) => <div className="timeline-item" key={item.id}><strong>{item.action}</strong><span>{item.detail}</span><small>{new Date(item.happenedAt).toLocaleString('zh-TW')}</small></div>)}{!audits.length && <div className="empty">尚無修改紀錄</div>}</div></div>
-    </section>
+export default function App(){
+  const works=usePackPilotStore(s=>s.works), workdays=usePackPilotStore(s=>s.workdays), audits=usePackPilotStore(s=>s.audits), add=usePackPilotStore(s=>s.addWork), endDay=usePackPilotStore(s=>s.endWorkday), reset=usePackPilotStore(s=>s.resetAll), now=useClock()
+  const [tab,setTab]=useState<'today'|'log'|'report'>('today'), [form,setForm]=useState(false), [channel,setChannel]=useState<ChannelId>('shopee'), [delivery,setDelivery]=useState<DeliveryType>('convenience-store'), [orders,setOrders]=useState('1'), [lead,setLead]=useState('韋'), [helpers,setHelpers]=useState<string[]>([]), [note,setNote]=useState(''), [selectedDay,setSelectedDay]=useState(dayKey())
+  const today=dayKey(); const carry=works.filter(w=>w.status==='suspended'); const current=works.filter(w=>w.currentWorkday===today && !['cancelled','suspended'].includes(w.status)); const completeToday=works.filter(w=>w.completedAt?.startsWith(today));
+  const dayWorks=works.filter(w=>w.originWorkday===selectedDay||w.currentWorkday===selectedDay||w.completedAt?.startsWith(selectedDay));
+  const totalOrders=completeToday.reduce((n,w)=>n+w.orderCount,0); const totalCore=completeToday.reduce((n,w)=>n+w.stages.filter(s=>coreStages.includes(s.stage)).reduce((a,s)=>a+sessionMs(s,now),0),0)
+  const report=`【${today} 工作回報】\n完成批次：${completeToday.length}\n完成單數：${totalOrders}\n核心作業時間：${fmt(totalCore)}\n\n未完成待續：${works.filter(w=>w.status==='suspended').length}\n等待物流：${works.filter(w=>w.status==='waiting').length}`
+  const submit=()=>{add({channelId:channel,deliveryType:delivery,orderCount:Number(orders)||0,leadWorker:lead,helpers,note});setForm(false);setNote('')}
+  return <main className="app-shell"><header className="hero"><div><p className="eyebrow">PACKPILOT · V0.5 試作版</p><h1>工作跨日不斷線，效率也不替下班時間背黑鍋。</h1><p>{today} · 固定工作者、多人協作、自動等待物流、工作日結算與跨日接續。</p></div><button className="icon" onClick={()=>window.confirm('清除所有試作資料？')&&reset()}><RotateCcw/></button></header>
+  <nav className="tabs"><button className={tab==='today'?'active':''} onClick={()=>setTab('today')}><Clock3/>今日工作</button><button className={tab==='log'?'active':''} onClick={()=>setTab('log')}><CalendarDays/>工作日誌</button><button className={tab==='report'?'active':''} onClick={()=>setTab('report')}><ClipboardList/>工作回報</button></nav>
+  {tab==='today'&&<><section className="summary-grid"><div><small>今日完成</small><strong>{totalOrders}</strong><span>{completeToday.length} 批</span></div><div><small>核心作業</small><strong>{fmt(totalCore)}</strong><span>不含等待與擱置</span></div><div><small>跨日待續</small><strong>{carry.length}</strong><span>可直接接續</span></div><div><small>等待物流</small><strong>{works.filter(w=>w.status==='waiting').length}</strong><span>不計效率</span></div></section>
+  {carry.length>0&&<section><div className="section-title"><h2>昨日待續</h2><span>{carry.length}</span></div><div className="stack">{carry.map(w=><WorkCard key={w.id} work={w} now={now}/>)}</div></section>}
+  <div className="main-actions"><button className="new-work" onClick={()=>setForm(!form)}><Plus/>新增工作</button><button className="end-day" onClick={()=>window.confirm('結束今天工作？所有未完成工作會停止計時並轉為跨日待續。')&&endDay()}><LogOut/>結束今天工作</button></div>
+  {form&&<section className="create-panel"><label>通路<select value={channel} onChange={e=>setChannel(e.target.value as ChannelId)}>{channels.map(c=><option key={c.id} value={c.id}>{c.label}</option>)}</select></label>{channel!=='inventory-system'&&<><label>配送<select value={delivery} onChange={e=>setDelivery(e.target.value as DeliveryType)}><option value="convenience-store">超商</option><option value="home-delivery">宅配</option></select></label><label>單數<input type="number" min="0" value={orders} onChange={e=>setOrders(e.target.value)}/></label></>}<WorkerPicker lead={lead} setLead={setLead} helpers={helpers} setHelpers={setHelpers}/><label className="full">備註<input value={note} onChange={e=>setNote(e.target.value)}/></label><button className="primary full" onClick={submit}>建立並開始第一階段</button></section>}
+  <section><div className="section-title"><h2>今天的工作</h2><span>{current.length}</span></div><div className="stack">{current.length?current.map(w=><WorkCard key={w.id} work={w} now={now}/>):<div className="empty">今天尚未建立工作</div>}</div></section></>}
+  {tab==='log'&&<section><div className="section-title"><h2>工作日誌</h2><span>{workdays.length}</span></div><div className="day-picker">{[...new Set([today,...workdays.map(d=>d.date),...works.map(w=>w.originWorkday)])].sort().reverse().map(d=><button className={selectedDay===d?'active':''} onClick={()=>setSelectedDay(d)} key={d}>{d}</button>)}</div><div className="stack">{dayWorks.length?dayWorks.map(w=><WorkCard key={w.id} work={w} now={now}/>):<div className="empty">這一天沒有紀錄</div>}</div><div className="audit"><h3>當日事件</h3>{audits.filter(a=>a.happenedAt.startsWith(selectedDay)).map(a=><p key={a.id}><b>{a.action}</b><span>{a.detail}</span><small>{new Date(a.happenedAt).toLocaleTimeString('zh-TW')}</small></p>)}</div></section>}
+  {tab==='report'&&<section><div className="section-title"><h2>今日回報試作</h2></div><textarea readOnly value={report}/><button className="primary" onClick={()=>navigator.clipboard.writeText(report)}><Copy size={17}/>複製回報</button><p className="hint">目前先提供精簡版。完整人員、通路與階段明細會在正式版擴充。</p></section>}
   </main>
 }

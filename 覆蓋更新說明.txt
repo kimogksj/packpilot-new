@@ -1,20 +1,9 @@
-PackPilot v0.4.0 免開發環境更新方式
+PackPilot v0.5.0 試作版更新方式
 
-1. 先關閉 GitHub Desktop 以外正在開啟專案檔案的程式。
-2. 將本壓縮檔解壓縮。
-3. 把解壓縮後的所有檔案複製到你原本的 packpilot-new 專案資料夾。
-4. 選擇「取代目的地中的檔案」。
-5. 不要刪除原專案內的 .git 資料夾。
-6. 開啟 GitHub Desktop，確認 Changes 中出現修改。
-7. Summary 填入：Update PackPilot v0.4.0
-8. 按 Commit to main，再按 Push origin。
-9. 到 GitHub 網站的 Actions，等待部署出現綠色勾勾。
-10. 若網頁仍顯示舊版，先用無痕視窗開啟，或清除該網站的 Service Worker／網站資料。
+1. 解壓縮此壓縮檔。
+2. 將內容全部覆蓋到原本 packpilot-new 資料夾。
+3. 請保留原本的 .git 資料夾，不要刪除。
+4. 使用 GitHub Desktop Commit 並 Push origin。
+5. 到 GitHub Actions 等待部署完成。
 
-網站：
-https://kimogksj.github.io/packpilot-new/
-
-重要：
-- 本版固定使用 /packpilot-new/。
-- 本版不需要你執行 npm install 或 npm run build。
-- GitHub Actions 會在 Push 後自動安裝與建置。
+注意：此版本使用新的試作資料鍵 packpilot-data-v5-trial，不會直接覆蓋 v0.4 的 LocalStorage 資料，方便安全試用。
