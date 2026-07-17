@@ -1,9 +1,9 @@
-PackPilot v0.5.0 試作版更新方式
+PackPilot v0.5.1 Trial 2 覆蓋更新方式
 
-1. 解壓縮此壓縮檔。
-2. 將內容全部覆蓋到原本 packpilot-new 資料夾。
-3. 請保留原本的 .git 資料夾，不要刪除。
-4. 使用 GitHub Desktop Commit 並 Push origin。
-5. 到 GitHub Actions 等待部署完成。
+1. 解壓縮本 ZIP。
+2. 在原 GitHub 專案資料夾中保留 .git 資料夾。
+3. 其餘檔案以本版本全部覆蓋。
+4. 使用 GitHub Desktop Commit，再 Push origin。
+5. 等待 GitHub Actions 完成部署。
 
-注意：此版本使用新的試作資料鍵 packpilot-data-v5-trial，不會直接覆蓋 v0.4 的 LocalStorage 資料，方便安全試用。
+此版本沿用 packpilot-data-v5-trial，並自動遷移舊試作資料。

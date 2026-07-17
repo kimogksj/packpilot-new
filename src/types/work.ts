@@ -18,6 +18,7 @@ export interface StageRecord {
 export interface SuspensionRecord { id: string; startedAt: string; resumedAt?: string; fromWorkday: string; toWorkday?: string }
 export interface WorkItem {
   id: string
+  jobCode?: string
   channelId: ChannelId
   displayName: string
   sequence: number
@@ -37,3 +38,4 @@ export interface WorkItem {
 export interface WorkdayRecord { date: string; closedAt?: string; reopenedAt?: string }
 export interface AuditRecord { id: string; workId: string; happenedAt: string; action: string; detail: string }
 export interface AddWorkInput { channelId: ChannelId; deliveryType: DeliveryType; orderCount: number; leadWorker: string; helpers: string[]; note: string }
+export interface StageTimeInput { startedAt: string; endedAt: string; leadWorker: string; helpers: string[]; markCompleted: boolean }
