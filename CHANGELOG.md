@@ -1,10 +1,23 @@
-# PackPilot v0.5.2 Trial 3
+# PackPilot Changelog
 
-- 修正寄貨完成或搬到走廊完成後，整筆訂單未自動標示為完成的問題。
-- 最終物流階段完成後，立即寫入完成日期並同步首頁、工作日誌與工作回報。
-- 首頁新增「處理到貨」快速計時卡，不需建立廠商、件數或流程資料。
-- 到貨可在同一天記錄多次，工作回報與工作日誌會顯示次數及總時間。
-- 到貨工時獨立於訂單核心作業效率，不會拉低每單處理效率。
-- 開始到貨時只會暫停「韋」本人正在自動計時的階段，其他同事的工作可同時進行。
-- 到貨不提供跨日接續；結束工作日時若仍在計時，會以當下時間自動完成。
-- 保留全部通路固定展示、非本人手動工時與跨日訂單接續功能。
+## v0.6.0 Alpha Revision 1
+
+### Added
+- Shipment batches: one timed trip can complete multiple convenience-store jobs.
+- Independent activity events for inbound handling and inventory-system use.
+- Editable work quantity, channel, delivery type, and note.
+- Independent worker editing that does not replace or stop the timer.
+- Automatic timing for every worker by default.
+- Channel recognition colors and larger channel-first work cards.
+- Audit records for work, event, shipment, and workday changes.
+
+### Changed
+- Removed inventory-system from order channels and modeled it as an event.
+- Removed per-order convenience-store shipping stage.
+- Home delivery still completes by moving packages to the hallway.
+- Reports now distinguish completed orders from shipment trips.
+- Persistence schema upgraded to version 8 with migration from v0.5 data.
+
+### Known Alpha Notes
+- This is an architecture revision intended for field testing.
+- Existing v0.5 inventory-system jobs are excluded during migration; prior inbound sessions are migrated to events.

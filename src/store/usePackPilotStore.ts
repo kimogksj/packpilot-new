@@ -1,153 +1,46 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
-import type { AddWorkInput, AuditRecord, ChannelId, InboundSession, StageRecord, StageTimeInput, TrackingMode, WorkItem, WorkStage, WorkdayRecord } from '../types/work'
+import type { ActivityEvent, AddWorkInput, AuditRecord, ChannelId, EventType, ShipmentBatch, StageRecord, StageTimeInput, WorkItem, WorkStage, WorkdayRecord } from '../types/work'
 
 interface State {
-  schemaVersion: 7
-  works: WorkItem[]
-  inboundSessions: InboundSession[]
-  workdays: WorkdayRecord[]
-  audits: AuditRecord[]
-  counters: Record<ChannelId, number>
-  addWork: (input: AddWorkInput) => void
-  startStage: (workId: string, stage: WorkStage, lead: string, helpers: string[]) => void
-  completeStage: (workId: string, stage: WorkStage) => void
-  pauseStage: (workId: string, stage: WorkStage) => void
-  resumeStage: (workId: string, stage: WorkStage) => void
-  updateStageTime: (workId: string, stage: WorkStage, input: StageTimeInput) => void
-  suspendWork: (workId: string) => void
-  resumeWork: (workId: string) => void
-  startInbound: () => void
-  completeInbound: () => void
-  endWorkday: () => void
-  cancelWork: (workId: string) => void
-  deleteWork: (workId: string) => void
-  resetAll: () => void
+  schemaVersion: 8
+  works: WorkItem[]; events: ActivityEvent[]; shipments: ShipmentBatch[]; workdays: WorkdayRecord[]; audits: AuditRecord[]; counters: Record<ChannelId, number>
+  addWork(input:AddWorkInput):void; updateWorkDetails(id:string, patch:Partial<Pick<WorkItem,'orderCount'|'channelId'|'deliveryType'|'note'>>):void
+  updateStageWorkers(id:string, stage:WorkStage, lead:string, helpers:string[]):void
+  startStage(id:string, stage:WorkStage, lead:string, helpers:string[]):void; pauseStage(id:string, stage:WorkStage):void; resumeStage(id:string, stage:WorkStage):void; completeStage(id:string, stage:WorkStage):void; updateStageTime(id:string, stage:WorkStage, input:StageTimeInput):void
+  suspendWork(id:string):void; resumeWork(id:string):void; cancelWork(id:string):void; deleteWork(id:string):void
+  startEvent(type:EventType, worker:string, note?:string):void; completeEvent(id:string):void
+  startShipment(workIds:string[], worker:string, helpers:string[], note?:string):void; completeShipment(id:string):void
+  endWorkday():void; resetAll():void
 }
+export const workers=['韋','NIKI','豪豪','阿拉蕾','小田','其他']
+export const channelNames:Record<ChannelId,string>={shopee:'蝦皮',preorder:'預購',myship:'賣貨便','boss-note':'老闆記事本',ojisan:'歐吉桑',ichibansan:'一番桑',other:'其他'}
+const initialCounters:Record<ChannelId,number>={shopee:0,preorder:0,myship:0,'boss-note':0,ojisan:0,ichibansan:0,other:0}
+const uid=()=>crypto.randomUUID(), iso=()=>new Date().toISOString()
+export const dayKey=(d=new Date())=>d.toLocaleDateString('sv-SE')
+const makeStage=(stage:WorkStage):StageRecord=>({stage,status:'not-started',leadWorker:'',helpers:[],trackingMode:'automatic',sessions:[]})
+const stagesFor=(delivery:WorkItem['deliveryType'])=>delivery==='home-delivery'?[makeStage('picking'),makeStage('sorting'),makeStage('packing'),makeStage('waiting-logistics'),makeStage('moving-hallway')]:[makeStage('picking'),makeStage('sorting'),makeStage('packing'),makeStage('waiting-logistics')]
+const close=(s:StageRecord,at:string)=>({...s,sessions:s.sessions.map(x=>x.endedAt?x:{...x,endedAt:at})})
+const derive=(w:WorkItem):WorkItem=>{if(w.cancelledAt)return{...w,status:'cancelled'};if(w.status==='suspended')return w;if(w.deliveryType==='home-delivery'&&w.stages.find(s=>s.stage==='moving-hallway')?.status==='completed')return{...w,status:'completed',completedAt:w.completedAt??w.updatedAt};if(w.shipmentId)return{...w,status:'completed',completedAt:w.completedAt??w.updatedAt};if(w.stages.find(s=>s.stage==='waiting-logistics')?.status==='waiting')return{...w,status:'waiting',completedAt:undefined};return{...w,status:'active',completedAt:undefined}}
+const audit=(entityType:AuditRecord['entityType'],entityId:string,action:string,detail:string):AuditRecord=>({id:uid(),entityType,entityId,happenedAt:iso(),action,detail})
+const jobCodeFor=(date:string,works:WorkItem[])=>`PP-${date.replaceAll('-','')}-${String(works.filter(w=>w.originWorkday===date).length+1).padStart(3,'0')}`
 
-export const workers = ['韋', 'NIKI', '豪豪', '阿拉蕾', '小田', '其他']
-export const channelNames: Record<ChannelId, string> = {
-  shopee: '蝦皮', preorder: '預購', myship: '賣貨便', 'boss-note': '老闆記事本', ojisan: '歐吉桑', ichibansan: '一番桑', 'inventory-system': '庫存系統', other: '其他',
-}
-const initialCounters: Record<ChannelId, number> = { shopee: 0, preorder: 0, myship: 0, 'boss-note': 0, ojisan: 0, ichibansan: 0, 'inventory-system': 0, other: 0 }
-const uid = () => crypto.randomUUID()
-const iso = () => new Date().toISOString()
-export const dayKey = (date = new Date()) => date.toLocaleDateString('sv-SE')
-const makeStage = (stage: WorkStage): StageRecord => ({ stage, status: 'not-started', leadWorker: '', helpers: [], trackingMode: 'manual', sessions: [] })
-const stagesFor = (channelId: ChannelId, delivery: WorkItem['deliveryType']) => {
-  if (channelId === 'inventory-system') return [makeStage('system-use')]
-  return delivery === 'home-delivery'
-    ? [makeStage('picking'), makeStage('sorting'), makeStage('packing'), makeStage('waiting-logistics'), makeStage('moving-hallway')]
-    : [makeStage('picking'), makeStage('sorting'), makeStage('packing'), makeStage('waiting-logistics'), makeStage('shipping')]
-}
-const close = (stage: StageRecord, at: string) => ({ ...stage, sessions: stage.sessions.map(s => s.endedAt ? s : { ...s, endedAt: at }) })
-const derive = (w: WorkItem): WorkItem => {
-  if (w.cancelledAt) return { ...w, status: 'cancelled' }
-  if (w.status === 'suspended') return w
-  const finalStage = w.stages.find(s => ['shipping', 'moving-hallway', 'system-use'].includes(s.stage))
-  if (finalStage && (finalStage.status === 'completed' || finalStage.status === 'skipped')) return { ...w, status: 'completed', completedAt: w.completedAt ?? finalStage.completedAt ?? w.updatedAt }
-  if (w.stages.some(s => s.stage === 'waiting-logistics' && s.status === 'waiting')) return { ...w, status: 'waiting' }
-  return { ...w, status: 'active', completedAt: undefined }
-}
-const audit = (workId: string, action: string, detail: string): AuditRecord => ({ id: uid(), workId, happenedAt: iso(), action, detail })
-const modeFor = (lead: string): TrackingMode => lead === '韋' ? 'automatic' : 'manual'
-const completeWithTransitions = (w: WorkItem, stageName: WorkStage, at: string, replacement?: StageRecord) => {
-  let stages = w.stages.map(s => s.stage !== stageName ? s : replacement ?? { ...close(s, at), status: 'completed' as const, completedAt: at })
-  if (stageName === 'packing') stages = stages.map(s => s.stage === 'waiting-logistics' ? { ...s, status: 'waiting' as const, sessions: [{ id: uid(), startedAt: at, source: 'manual' as const }] } : s)
-  const isFinal = stageName === 'shipping' || stageName === 'moving-hallway' || stageName === 'system-use'
-  return derive({ ...w, updatedAt: at, completedAt: isFinal ? at : w.completedAt, stages })
-}
-const jobCodeFor = (date: string, works: WorkItem[]) => {
-  const n = works.filter(w => w.originWorkday === date).length + 1
-  return `PP-${date.replaceAll('-', '')}-${String(n).padStart(3, '0')}`
-}
-
-export const usePackPilotStore = create<State>()(persist((set, get) => ({
-  schemaVersion: 7, works: [], inboundSessions: [], workdays: [{ date: dayKey() }], audits: [], counters: initialCounters,
-  addWork: (input) => {
-    const state = get(); const at = iso(); const date = dayKey(); const sequence = (state.counters[input.channelId] ?? 0) + 1
-    const delivery = input.channelId === 'inventory-system' ? 'internal' : input.channelId === 'myship' ? 'convenience-store' : input.deliveryType
-    const stages = stagesFor(input.channelId, delivery); const first = stages[0]; const mode = modeFor(input.leadWorker)
-    first.status = mode === 'automatic' ? 'working' : 'paused'
-    first.leadWorker = input.leadWorker
-    first.helpers = input.channelId === 'inventory-system' ? [] : input.helpers.filter(h => h !== input.leadWorker)
-    first.trackingMode = mode
-    first.sessions = mode === 'automatic' ? [{ id: uid(), startedAt: at, source: mode }] : []
-    const base = channelNames[input.channelId]
-    const work: WorkItem = { id: uid(), jobCode: jobCodeFor(date, state.works), channelId: input.channelId, displayName: sequence === 1 ? base : `${base}（${sequence}）`, sequence, deliveryType: delivery, orderCount: Math.max(0, Math.floor(input.orderCount)), note: input.note.trim(), createdAt: at, updatedAt: at, status: 'active', originWorkday: date, currentWorkday: date, stages, suspensions: [] }
-    const detail = mode === 'automatic' ? `${work.displayName}，主要：${input.leadWorker}，自動開始` : `${work.displayName}，主要：${input.leadWorker}，等待手動補登時間`
-    set({ works: [work, ...state.works], counters: { ...state.counters, [input.channelId]: sequence }, workdays: state.workdays.some(d => d.date === date) ? state.workdays : [{ date }, ...state.workdays], audits: [audit(work.id, '建立工作', detail), ...state.audits] })
-  },
-  startStage: (workId, stageName, lead, helpers) => set(state => ({ works: state.works.map(w => {
-    if (w.id !== workId) return w; const at = iso(); const mode = modeFor(lead)
-    return derive({ ...w, status: 'active', updatedAt: at, currentWorkday: dayKey(), stages: w.stages.map(s => {
-      if ((stageName === 'shipping' || stageName === 'moving-hallway') && s.stage === 'waiting-logistics' && s.status === 'waiting') return { ...close(s, at), status: 'completed' as const, completedAt: at }
-      if (s.stage !== stageName) return s
-      return { ...s, status: mode === 'automatic' ? 'working' : 'paused', leadWorker: lead, helpers: stageName === 'sorting' ? [] : helpers.filter(h => h !== lead), trackingMode: mode, sessions: mode === 'automatic' ? [...s.sessions, { id: uid(), startedAt: at, source: mode }] : s.sessions }
-    }) })
-  }), audits: [audit(workId, '開始階段', `${stageName}（${modeFor(state.works.find(w=>w.id===workId)?.stages.find(s=>s.stage===stageName)?.leadWorker ?? '') === 'automatic' ? '自動' : '手動'}）`), ...state.audits] })),
-  completeStage: (workId, stageName) => set(state => ({ works: state.works.map(w => w.id !== workId ? w : completeWithTransitions(w, stageName, iso())), audits: [audit(workId, '完成階段', stageName), ...state.audits] })),
-  pauseStage: (workId, stageName) => set(state => ({ works: state.works.map(w => w.id !== workId ? w : derive({ ...w, updatedAt: iso(), stages: w.stages.map(s => s.stage !== stageName ? s : { ...close(s, iso()), status: 'paused' }) })), audits: [audit(workId, '暫停階段', stageName), ...state.audits] })),
-  resumeStage: (workId, stageName) => {
-    const w = get().works.find(x => x.id === workId); const s = w?.stages.find(x => x.stage === stageName); if (!w || !s) return
-    get().startStage(workId, stageName, s.leadWorker || '韋', s.helpers)
-  },
-  updateStageTime: (workId, stageName, input) => set(state => ({ works: state.works.map(w => {
-    if (w.id !== workId) return w
-    const start = new Date(input.startedAt); const end = new Date(input.endedAt)
-    if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return w
-    const at = end.toISOString()
-    const replacement: StageRecord = { ...(w.stages.find(s => s.stage === stageName) as StageRecord), leadWorker: input.leadWorker, helpers: stageName === 'sorting' ? [] : input.helpers.filter(h => h !== input.leadWorker), trackingMode: 'manual', sessions: [{ id: uid(), startedAt: start.toISOString(), endedAt: at, source: 'manual' }], status: input.markCompleted ? 'completed' : 'paused', completedAt: input.markCompleted ? at : undefined }
-    if (input.markCompleted) return completeWithTransitions(w, stageName, at, replacement)
-    return derive({ ...w, updatedAt: iso(), stages: w.stages.map(s => s.stage === stageName ? replacement : s) })
-  }), audits: [audit(workId, '調整工作時間', `${stageName}：${input.startedAt} ～ ${input.endedAt}${input.markCompleted ? '，標記完成' : ''}`), ...state.audits] })),
-  suspendWork: (workId) => set(state => ({ works: state.works.map(w => {
-    if (w.id !== workId || ['completed','cancelled','suspended'].includes(w.status)) return w
-    const at = iso(); return { ...w, status: 'suspended' as const, updatedAt: at, stages: w.stages.map(s => s.status === 'working' ? { ...close(s, at), status: 'paused' as const } : s), suspensions: [...w.suspensions, { id: uid(), startedAt: at, fromWorkday: dayKey() }] }
-  }), audits: [audit(workId, '擱置工作', '等待下一個工作日接續；擱置時間不計入效率'), ...state.audits] })),
-  resumeWork: (workId) => set(state => ({ works: state.works.map(w => {
-    if (w.id !== workId || w.status !== 'suspended') return w
-    const at = iso(); return derive({ ...w, status: 'active', updatedAt: at, currentWorkday: dayKey(), suspensions: w.suspensions.map((s, i) => i === w.suspensions.length - 1 && !s.resumedAt ? { ...s, resumedAt: at, toWorkday: dayKey() } : s) })
-  }), audits: [audit(workId, '接續工作', `接續至 ${dayKey()}`), ...state.audits] })),
-  startInbound: () => {
-    const state = get()
-    if (state.inboundSessions.some(s => !s.endedAt)) return
-    const at = iso()
-    const pausedWorkIds: string[] = []
-    const works = state.works.map(w => {
-      let changed = false
-      const stages = w.stages.map(s => {
-        if (s.status === 'working' && s.leadWorker === '韋') { changed = true; return { ...close(s, at), status: 'paused' as const }
-        }
-        return s
-      })
-      if (changed) pausedWorkIds.push(w.id)
-      return changed ? derive({ ...w, updatedAt: at, stages }) : w
-    })
-    const session: InboundSession = { id: uid(), startedAt: at, worker: '韋' }
-    const pauseAudits = pausedWorkIds.map(id => audit(id, '暫停階段', '開始處理到貨，同一位執行者的自動計時已暫停'))
-    set({ works, inboundSessions: [session, ...state.inboundSessions], audits: [audit('inbound', '開始處理到貨', '韋'), ...pauseAudits, ...state.audits] })
-  },
-  completeInbound: () => {
-    const state = get(); const at = iso()
-    if (!state.inboundSessions.some(s => !s.endedAt)) return
-    set({ inboundSessions: state.inboundSessions.map(s => !s.endedAt ? { ...s, endedAt: at } : s), audits: [audit('inbound', '完成處理到貨', '本次到貨工時計時結束'), ...state.audits] })
-  },
-  endWorkday: () => {
-    const state = get(); const at = iso(); const date = dayKey()
-    set({ inboundSessions: state.inboundSessions.map(s => !s.endedAt ? { ...s, endedAt: at } : s), works: state.works.map(w => {
-      if (w.currentWorkday !== date || ['completed','cancelled','suspended'].includes(w.status)) return w
-      return { ...w, status: 'suspended' as const, updatedAt: at, stages: w.stages.map(s => s.status === 'working' ? { ...close(s, at), status: 'paused' as const } : s), suspensions: [...w.suspensions, { id: uid(), startedAt: at, fromWorkday: date }] }
-    }), workdays: state.workdays.some(d => d.date === date) ? state.workdays.map(d => d.date === date ? { ...d, closedAt: at } : d) : [{ date, closedAt: at }, ...state.workdays], audits: [audit('workday', '結束工作日', date), ...state.audits] })
-  },
-  cancelWork: (workId) => set(state => ({ works: state.works.map(w => w.id === workId ? { ...w, cancelledAt: iso(), status: 'cancelled' } : w), audits: [audit(workId, '取消工作', '標記為取消／異常'), ...state.audits] })),
-  deleteWork: (workId) => set(state => ({ works: state.works.filter(w => w.id !== workId), audits: state.audits.filter(a => a.workId !== workId) })),
-  resetAll: () => set({ works: [], inboundSessions: [], workdays: [{ date: dayKey() }], audits: [], counters: initialCounters }),
-}), {
-  name: 'packpilot-data-v5-trial', version: 7, storage: createJSONStorage(() => localStorage),
-  migrate: (persisted: unknown) => {
-    const old = persisted as Partial<State>
-    return { ...old, schemaVersion: 7, inboundSessions: old.inboundSessions ?? [], works: (old.works ?? []).map((w, i) => ({ ...w, jobCode: w.jobCode ?? `PP-${w.originWorkday.replaceAll('-', '')}-${String(i + 1).padStart(3, '0')}` })) } as State
-  },
-  partialize: s => ({ schemaVersion: s.schemaVersion, works: s.works, inboundSessions: s.inboundSessions, workdays: s.workdays, audits: s.audits, counters: s.counters }),
-}))
+export const usePackPilotStore=create<State>()(persist((set,get)=>({
+  schemaVersion:8,works:[],events:[],shipments:[],workdays:[{date:dayKey()}],audits:[],counters:initialCounters,
+  addWork:(input)=>{const s=get(),at=iso(),date=dayKey(),seq=(s.counters[input.channelId]??0)+1,stages=stagesFor(input.deliveryType),first=stages[0];first.status='working';first.leadWorker=input.leadWorker;first.helpers=input.helpers.filter(x=>x!==input.leadWorker);first.sessions=[{id:uid(),startedAt:at,source:'automatic'}];const base=channelNames[input.channelId];const w:WorkItem={id:uid(),jobCode:jobCodeFor(date,s.works),channelId:input.channelId,displayName:seq===1?base:`${base}（${seq}）`,sequence:seq,deliveryType:input.deliveryType,orderCount:Math.max(0,Math.floor(input.orderCount)),note:input.note.trim(),createdAt:at,updatedAt:at,status:'active',originWorkday:date,currentWorkday:date,stages,suspensions:[]};set({works:[w,...s.works],counters:{...s.counters,[input.channelId]:seq},audits:[audit('work',w.id,'建立工作',`${w.displayName}，${w.orderCount} 單，${input.leadWorker} 自動開始`),...s.audits]})},
+  updateWorkDetails:(id,patch)=>set(s=>{const old=s.works.find(w=>w.id===id);if(!old)return s;const p={...patch};if(patch.orderCount!==undefined)p.orderCount=Math.max(0,Math.floor(patch.orderCount));const next:WorkItem={...old,...p,updatedAt:iso(),displayName:patch.channelId?channelNames[patch.channelId]:old.displayName};const changes=Object.entries(patch).map(([k,v])=>`${k}: ${String((old as unknown as Record<string,unknown>)[k])} → ${String(v)}`).join('；');return{works:s.works.map(w=>w.id===id?derive(next):w),audits:[audit('work',id,'修改工作資料',changes),...s.audits]}}),
+  updateStageWorkers:(id,stage,lead,helpers)=>set(s=>({works:s.works.map(w=>w.id!==id?w:{...w,updatedAt:iso(),stages:w.stages.map(x=>x.stage!==stage?x:{...x,leadWorker:lead,helpers:helpers.filter(h=>h!==lead)})}),audits:[audit('work',id,'修改執行人員',`${stage}：主要 ${lead}，協助 ${helpers.join('、')||'無'}`),...s.audits]})),
+  startStage:(id,stage,lead,helpers)=>set(s=>({works:s.works.map(w=>{if(w.id!==id)return w;const at=iso();return derive({...w,updatedAt:at,currentWorkday:dayKey(),stages:w.stages.map(x=>{if(x.stage===stage)return{...x,status:'working',leadWorker:lead,helpers:helpers.filter(h=>h!==lead),trackingMode:'automatic',sessions:[...x.sessions,{id:uid(),startedAt:at,source:'automatic'}]};return x})})}),audits:[audit('work',id,'開始階段',`${stage}，${lead}`),...s.audits]})),
+  pauseStage:(id,stage)=>set(s=>({works:s.works.map(w=>w.id!==id?w:derive({...w,updatedAt:iso(),stages:w.stages.map(x=>x.stage===stage?{...close(x,iso()),status:'paused'}:x)})),audits:[audit('work',id,'暫停階段',stage),...s.audits]})),
+  resumeStage:(id,stage)=>{const x=get().works.find(w=>w.id===id)?.stages.find(s=>s.stage===stage);if(x)get().startStage(id,stage,x.leadWorker||'韋',x.helpers)},
+  completeStage:(id,stage)=>set(s=>({works:s.works.map(w=>{if(w.id!==id)return w;const at=iso();let stages=w.stages.map(x=>x.stage===stage?{...close(x,at),status:'completed' as const,completedAt:at}:x);if(stage==='packing')stages=stages.map(x=>x.stage==='waiting-logistics'?{...x,status:'waiting' as const,sessions:[{id:uid(),startedAt:at,source:'automatic' as const}]}:x);const completed=stage==='moving-hallway';return derive({...w,updatedAt:at,completedAt:completed?at:w.completedAt,stages})}),audits:[audit('work',id,'完成階段',stage),...s.audits]})),
+  updateStageTime:(id,stage,input)=>set(s=>({works:s.works.map(w=>{if(w.id!==id)return w;const a=new Date(input.startedAt),b=new Date(input.endedAt);if(!Number.isFinite(a.getTime())||!Number.isFinite(b.getTime())||b<=a)return w;const at=b.toISOString();let stages=w.stages.map(x=>x.stage!==stage?x:{...x,trackingMode:'manual' as const,sessions:[{id:uid(),startedAt:a.toISOString(),endedAt:at,source:'manual' as const}],status:input.markCompleted?'completed' as const:'paused' as const,completedAt:input.markCompleted?at:undefined});if(stage==='packing'&&input.markCompleted)stages=stages.map(x=>x.stage==='waiting-logistics'?{...x,status:'waiting' as const,sessions:[{id:uid(),startedAt:at,source:'automatic' as const}]}:x);return derive({...w,updatedAt:iso(),stages})}),audits:[audit('work',id,'調整工作時間',`${stage}：${input.startedAt} ～ ${input.endedAt}`),...s.audits]})),
+  suspendWork:(id)=>set(s=>({works:s.works.map(w=>w.id!==id||['completed','cancelled','suspended'].includes(w.status)?w:{...w,status:'suspended' as const,updatedAt:iso(),stages:w.stages.map(x=>x.status==='working'?{...close(x,iso()),status:'paused' as const}:x),suspensions:[...w.suspensions,{id:uid(),startedAt:iso(),fromWorkday:dayKey()}]}),audits:[audit('work',id,'擱置工作','轉為跨日待續'),...s.audits]})),
+  resumeWork:(id)=>set(s=>({works:s.works.map(w=>w.id!==id||w.status!=='suspended'?w:derive({...w,status:'active',updatedAt:iso(),currentWorkday:dayKey(),suspensions:w.suspensions.map((x,i)=>i===w.suspensions.length-1&&!x.resumedAt?{...x,resumedAt:iso(),toWorkday:dayKey()}:x)})),audits:[audit('work',id,'接續工作',dayKey()),...s.audits]})),
+  cancelWork:(id)=>set(s=>({works:s.works.map(w=>w.id===id?{...w,cancelledAt:iso(),status:'cancelled'}:w),audits:[audit('work',id,'取消工作','標記取消'),...s.audits]})),deleteWork:(id)=>set(s=>({works:s.works.filter(w=>w.id!==id),audits:s.audits.filter(a=>a.entityId!==id)})),
+  startEvent:(type,worker,note='')=>{const s=get();if(s.events.some(e=>e.type===type&&!e.endedAt))return;const e:ActivityEvent={id:uid(),type,worker,startedAt:iso(),note};set({events:[e,...s.events],audits:[audit('event',e.id,'開始事件',`${type}，${worker}`),...s.audits]})},completeEvent:(id)=>set(s=>({events:s.events.map(e=>e.id===id&&!e.endedAt?{...e,endedAt:iso()}:e),audits:[audit('event',id,'完成事件','計時結束'),...s.audits]})),
+  startShipment:(workIds,worker,helpers,note='')=>{const s=get();const eligible=workIds.filter(id=>s.works.some(w=>w.id===id&&w.status==='waiting'&&w.deliveryType==='convenience-store'));if(!eligible.length)return;const batch:ShipmentBatch={id:uid(),code:`SHIP-${dayKey().replaceAll('-','')}-${String(s.shipments.length+1).padStart(3,'0')}`,workIds:eligible,worker,helpers:helpers.filter(h=>h!==worker),startedAt:iso(),note};set({shipments:[batch,...s.shipments],audits:[audit('shipment',batch.id,'開始寄貨批次',`${eligible.length} 筆工作，${worker}`),...s.audits]})},
+  completeShipment:(id)=>set(s=>{const b=s.shipments.find(x=>x.id===id);if(!b||b.endedAt)return s;const at=iso();return{shipments:s.shipments.map(x=>x.id===id?{...x,endedAt:at}:x),works:s.works.map(w=>b.workIds.includes(w.id)?{...w,shipmentId:id,status:'completed',completedAt:at,updatedAt:at,stages:w.stages.map(x=>x.stage==='waiting-logistics'?{...close(x,at),status:'completed' as const,completedAt:at}:x)}:w),audits:[audit('shipment',id,'完成寄貨批次',`${b.workIds.length} 筆工作完成`),...s.audits]}}),
+  endWorkday:()=>{const s=get(),at=iso(),date=dayKey();set({events:s.events.map(e=>!e.endedAt?{...e,endedAt:at}:e),shipments:s.shipments.map(b=>!b.endedAt?{...b,endedAt:at}:b),works:s.works.map(w=>w.currentWorkday!==date||['completed','cancelled','suspended'].includes(w.status)?w:{...w,status:'suspended',updatedAt:at,stages:w.stages.map(x=>x.status==='working'?{...close(x,at),status:'paused' as const}:x),suspensions:[...w.suspensions,{id:uid(),startedAt:at,fromWorkday:date}]}),workdays:s.workdays.some(d=>d.date===date)?s.workdays.map(d=>d.date===date?{...d,closedAt:at}:d):[{date,closedAt:at},...s.workdays],audits:[audit('workday',date,'結束工作日',date),...s.audits]})},
+  resetAll:()=>set({works:[],events:[],shipments:[],workdays:[{date:dayKey()}],audits:[],counters:initialCounters})
+}),{name:'packpilot-data-v6-alpha-r1',version:8,storage:createJSONStorage(()=>localStorage),migrate:(raw)=>{const old=raw as any;const works=(old.works??[]).filter((w:any)=>w.channelId!=='inventory-system').map((w:any,i:number)=>({...w,jobCode:w.jobCode??`PP-${(w.originWorkday??dayKey()).replaceAll('-','')}-${String(i+1).padStart(3,'0')}`,deliveryType:w.deliveryType==='internal'?'convenience-store':w.deliveryType,shipmentId:undefined,stages:(w.stages??[]).filter((x:any)=>x.stage!=='shipping'&&x.stage!=='system-use').map((x:any)=>({...x,trackingMode:x.trackingMode??'automatic'}))}));const events=(old.inboundSessions??[]).map((x:any)=>({id:x.id,type:'inbound',worker:x.worker??'韋',startedAt:x.startedAt,endedAt:x.endedAt,note:''}));return{schemaVersion:8,works,events,shipments:[],workdays:old.workdays??[{date:dayKey()}],audits:[],counters:{...initialCounters,...old.counters, 'inventory-system':undefined}}},partialize:s=>({schemaVersion:s.schemaVersion,works:s.works,events:s.events,shipments:s.shipments,workdays:s.workdays,audits:s.audits,counters:s.counters})}))

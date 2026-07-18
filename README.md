@@ -1,7 +1,27 @@
-# PackPilot
+# PackPilot v0.6.0 Alpha Revision 1
 
-手機優先的訂單處理、物流、跨日接續、工作日誌與工作回報工具。
+A mobile-first warehouse workflow tracker for figurine packing operations.
 
-目前版本：v0.5.2 Trial 3
+## Run locally
 
-本版本新增簡易「處理到貨」快速計時，並修正寄貨／搬運完成後的整筆工作完成判定。
+```bash
+npm ci
+npm run dev
+```
+
+## Production build
+
+```bash
+npm run build
+```
+
+The deployable static site is generated in `dist/` and is compatible with the project's existing GitHub Pages workflow.
+
+## Core modules
+
+- Order
+- Shipment
+- Event
+- Time Tracker
+
+See `docs/Architecture.md` for details.
