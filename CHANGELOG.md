@@ -1,5 +1,21 @@
 # PackPilot Changelog
 
+## v0.6.0 Alpha Revision 2.1
+
+### Added
+- A `復原完成` action on every manually completable stage: picking, sorting, packing, and moving home-delivery packages to the hallway.
+- Per-stage completion snapshots that restore the exact workflow state from immediately before that stage was completed.
+- Audit records for stage-level recovery.
+
+### Changed
+- Restoring a stage also rolls back automatic downstream effects. For example, restoring packing stops and removes the waiting-for-logistics session that packing completion started.
+- A restored running stage resumes timing from the recovery moment, so the completed gap is not counted as work time.
+- Persistence schema upgraded from 9 to 10 while preserving the existing storage key and Alpha data.
+
+### Fixed
+- Completing an individual stage by mistake no longer leaves that stage permanently locked as completed.
+- Restoring the final home-delivery stage reopens the Order instead of requiring only the whole-work recovery action.
+
 ## v0.6.0 Alpha Revision 2
 
 ### Added

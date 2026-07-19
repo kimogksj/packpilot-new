@@ -5,6 +5,8 @@ A channel job with an order quantity and operational stages: picking, sorting, p
 
 An Order stores a completion snapshot immediately before it enters the completed state. Undo and Restore use this snapshot to recover the prior workflow state without counting the completed gap as active work time.
 
+Each manually completable stage also stores its own pre-completion snapshot. Restoring a stage returns the Order to the exact state immediately before that stage was completed, including automatic side effects such as entering waiting for logistics after packing.
+
 ## Shipment
 A timed logistics trip containing one or more convenience-store Orders. Completing the Shipment completes all linked Orders without multiplying the trip duration.
 
@@ -30,4 +32,4 @@ Order time + Shipment time + Event time
 Waiting-for-logistics sessions remain visible on an Order but are excluded from Order work-time totals.
 
 ## Persistence
-The current persistence schema is version 9. It keeps the existing `packpilot-data-v6-alpha-r1` local-storage key so Alpha Revision 1 field data migrates in place instead of appearing to disappear.
+The current persistence schema is version 10. It keeps the existing `packpilot-data-v6-alpha-r1` local-storage key so Alpha Revision 1 field data migrates in place instead of appearing to disappear.

@@ -38,6 +38,13 @@ export interface WorkCompletionSnapshot {
   stages: StageRecord[]
 }
 
+export interface StageCompletionSnapshot {
+  status: WorkStatus
+  completedAt?: string
+  shipmentId?: string
+  stages: StageRecord[]
+}
+
 export interface WorkItem {
   id: string
   jobCode: string
@@ -58,6 +65,7 @@ export interface WorkItem {
   stages: StageRecord[]
   suspensions: SuspensionRecord[]
   completionSnapshot?: WorkCompletionSnapshot
+  stageCompletionSnapshots?: Partial<Record<WorkStage, StageCompletionSnapshot>>
 }
 
 export interface ActivityEvent {

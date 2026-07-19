@@ -1,4 +1,4 @@
-# PackPilot v0.6.0 Alpha Revision 2
+# PackPilot v0.6.0 Alpha Revision 2.1
 
 A mobile-first warehouse workflow tracker for figurine packing operations.
 
@@ -26,11 +26,12 @@ The deployable static site is generated in `dist/` and is compatible with the pr
 - Reporting
 - Completion Recovery
 
-## Alpha Revision 2 highlights
+## Alpha Revision 2.1 highlights
 
 - Shipment duration is included in today's statistics.
 - Total time equals Order + Shipment + Event.
 - Completed work supports Undo and Restore.
+- Every manually completed workflow stage can be restored independently.
 - Completed work is folded by default with an always-visible summary.
 
 See `docs/Architecture.md`, `docs/ADR.md`, and `docs/ProductPrinciples.md` for the current design rules.

@@ -198,6 +198,7 @@ function StageRow({ work, stage, now }: { work: WorkItem; stage: StageRecord; no
   const pause = usePackPilotStore(state => state.pauseStage)
   const resume = usePackPilotStore(state => state.resumeStage)
   const complete = usePackPilotStore(state => state.completeStage)
+  const restoreStage = usePackPilotStore(state => state.restoreStage)
   const [open, setOpen] = useState(false)
   const [edit, setEdit] = useState(false)
   const [lead, setLead] = useState(stage.leadWorker || '韋')
@@ -249,7 +250,11 @@ function StageRow({ work, stage, now }: { work: WorkItem; stage: StageRecord; no
             <Play size={16} />恢復
           </button>
         )}
-        {stage.status === 'completed' && <span className="done-label">已完成</span>}
+        {stage.status === 'completed' && (
+          <button className="restore-action" onClick={() => restoreStage(work.id, stage.stage)}>
+            <RotateCcw size={16} />復原完成
+          </button>
+        )}
         <button onClick={() => setEdit(!edit)}>
           <Edit3 size={16} />編輯
         </button>
@@ -673,7 +678,7 @@ export default function App() {
     <main className="app-shell">
       <header className="hero">
         <div>
-          <p className="eyebrow">PACKPILOT · V0.6.0 ALPHA REVISION 2</p>
+          <p className="eyebrow">PACKPILOT · V0.6.0 ALPHA REVISION 2.1</p>
           <h1>今天的工時，現在一滴都不漏。</h1>
           <p>{today} · 寄貨納入統計、完成操作可反悔、已完成清單自動收好。</p>
         </div>

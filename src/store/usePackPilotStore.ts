@@ -8,6 +8,7 @@ import type {
   EventType,
   RestoreMode,
   ShipmentBatch,
+  StageCompletionSnapshot,
   StageRecord,
   StageTimeInput,
   WorkCompletionSnapshot,
@@ -17,7 +18,7 @@ import type {
 } from '../types/work'
 
 interface State {
-  schemaVersion: 9
+  schemaVersion: 10
   works: WorkItem[]
   events: ActivityEvent[]
   shipments: ShipmentBatch[]
@@ -31,6 +32,7 @@ interface State {
   pauseStage(id: string, stage: WorkStage): void
   resumeStage(id: string, stage: WorkStage): void
   completeStage(id: string, stage: WorkStage): void
+  restoreStage(id: string, stage: WorkStage): void
   updateStageTime(id: string, stage: WorkStage, input: StageTimeInput): void
   suspendWork(id: string): void
   resumeWork(id: string): void
@@ -90,15 +92,23 @@ const close = (stage: StageRecord, at: string): StageRecord => ({
   sessions: stage.sessions.map(session => (session.endedAt ? session : { ...session, endedAt: at })),
 })
 
-const cloneStages = (stages: StageRecord[]): StageRecord[] =>
-  stages.map(stage => ({
-    ...stage,
-    helpers: [...stage.helpers],
-    sessions: stage.sessions.map(session => ({ ...session })),
-  }))
+const cloneStage = (stage: StageRecord): StageRecord => ({
+  ...stage,
+  helpers: [...stage.helpers],
+  sessions: stage.sessions.map(session => ({ ...session })),
+})
+
+const cloneStages = (stages: StageRecord[]): StageRecord[] => stages.map(cloneStage)
 
 const snapshotFor = (work: WorkItem): WorkCompletionSnapshot => ({
   status: work.status,
+  shipmentId: work.shipmentId,
+  stages: cloneStages(work.stages),
+})
+
+const stageSnapshotFor = (work: WorkItem): StageCompletionSnapshot => ({
+  status: work.status,
+  completedAt: work.completedAt,
   shipmentId: work.shipmentId,
   stages: cloneStages(work.stages),
 })
@@ -146,7 +156,7 @@ const fallbackSnapshot = (work: WorkItem): WorkCompletionSnapshot => {
   }
 }
 
-const restoreStages = (snapshot: WorkCompletionSnapshot, completedAt: string, restoredAt: string) =>
+const restoreStages = (snapshot: Pick<WorkCompletionSnapshot, 'stages'>, completedAt: string, restoredAt: string) =>
   snapshot.stages.map(stage => {
     const sessions = stage.sessions.map(session => (session.endedAt ? session : { ...session, endedAt: completedAt }))
     if (stage.status === 'working' || stage.status === 'waiting') {
@@ -155,14 +165,56 @@ const restoreStages = (snapshot: WorkCompletionSnapshot, completedAt: string, re
     return { ...stage, sessions }
   })
 
+const stageOrder: WorkStage[] = ['picking', 'sorting', 'packing', 'waiting-logistics', 'moving-hallway']
+
+const fallbackStageSnapshot = (work: WorkItem, target: WorkStage): StageCompletionSnapshot => {
+  const targetIndex = stageOrder.indexOf(target)
+  const stages = cloneStages(work.stages).map(record => {
+    const recordIndex = stageOrder.indexOf(record.stage)
+    if (record.stage === target) {
+      return { ...record, status: 'paused' as const, completedAt: undefined }
+    }
+    if (recordIndex > targetIndex) {
+      if (record.stage === 'waiting-logistics') {
+        return { ...record, status: 'not-started' as const, completedAt: undefined, sessions: [] }
+      }
+      if (record.status === 'completed') {
+        return { ...record, status: record.sessions.length ? ('paused' as const) : ('not-started' as const), completedAt: undefined }
+      }
+    }
+    return record
+  })
+  return {
+    status: 'active',
+    completedAt: undefined,
+    shipmentId: undefined,
+    stages,
+  }
+}
+
+const keepValidStageSnapshots = (
+  snapshots: WorkItem['stageCompletionSnapshots'],
+  restoredStages: StageRecord[],
+  restoredStage: WorkStage,
+): WorkItem['stageCompletionSnapshots'] => {
+  const completed = new Set(restoredStages.filter(record => record.status === 'completed').map(record => record.stage))
+  return Object.fromEntries(
+    Object.entries(snapshots ?? {}).filter(([stage]) => stage !== restoredStage && completed.has(stage as WorkStage)),
+  ) as WorkItem['stageCompletionSnapshots']
+}
+
 const migrateState = (raw: unknown) => {
   const old = (raw ?? {}) as Record<string, any>
 
   if ((old.schemaVersion ?? 0) >= 8) {
     return {
       ...old,
-      schemaVersion: 9,
-      works: (old.works ?? []).map((work: WorkItem) => ({ ...work, completionSnapshot: work.completionSnapshot })),
+      schemaVersion: 10,
+      works: (old.works ?? []).map((work: WorkItem) => ({
+        ...work,
+        completionSnapshot: work.completionSnapshot,
+        stageCompletionSnapshots: work.stageCompletionSnapshots ?? {},
+      })),
       events: old.events ?? [],
       shipments: old.shipments ?? [],
       workdays: old.workdays ?? [{ date: dayKey() }],
@@ -179,6 +231,7 @@ const migrateState = (raw: unknown) => {
       deliveryType: work.deliveryType === 'internal' ? 'convenience-store' : work.deliveryType,
       shipmentId: undefined,
       completionSnapshot: undefined,
+      stageCompletionSnapshots: {},
       stages: (work.stages ?? [])
         .filter((stage: any) => stage.stage !== 'shipping' && stage.stage !== 'system-use')
         .map((stage: any) => ({ ...stage, trackingMode: stage.trackingMode ?? 'automatic' })),
@@ -193,7 +246,7 @@ const migrateState = (raw: unknown) => {
   }))
 
   return {
-    schemaVersion: 9,
+    schemaVersion: 10,
     works,
     events,
     shipments: [],
@@ -206,7 +259,7 @@ const migrateState = (raw: unknown) => {
 export const usePackPilotStore = create<State>()(
   persist(
     (set, get) => ({
-      schemaVersion: 9,
+      schemaVersion: 10,
       works: [],
       events: [],
       shipments: [],
@@ -242,6 +295,7 @@ export const usePackPilotStore = create<State>()(
           currentWorkday: date,
           stages,
           suspensions: [],
+          stageCompletionSnapshots: {},
         }
         set({
           works: [work, ...state.works],
@@ -353,8 +407,14 @@ export const usePackPilotStore = create<State>()(
           return {
             works: state.works.map(work => {
               if (work.id !== id || work.status === 'completed') return work
+              const currentStage = work.stages.find(record => record.stage === stage)
+              if (!currentStage || currentStage.status === 'completed') return work
               const willCompleteWork = stage === 'moving-hallway' && work.deliveryType === 'home-delivery'
               const completionSnapshot = willCompleteWork ? snapshotFor(work) : work.completionSnapshot
+              const stageCompletionSnapshots = {
+                ...(work.stageCompletionSnapshots ?? {}),
+                [stage]: stageSnapshotFor(work),
+              }
               let stages = work.stages.map(record =>
                 record.stage === stage ? { ...close(record, at), status: 'completed' as const, completedAt: at } : record,
               )
@@ -370,10 +430,51 @@ export const usePackPilotStore = create<State>()(
                 updatedAt: at,
                 completedAt: willCompleteWork ? at : work.completedAt,
                 completionSnapshot,
+                stageCompletionSnapshots,
                 stages,
               })
             }),
             audits: [audit('work', id, '完成階段', stage), ...state.audits],
+          }
+        }),
+
+      restoreStage: (id, stage) =>
+        set(state => {
+          const work = state.works.find(item => item.id === id)
+          const record = work?.stages.find(item => item.stage === stage)
+          if (!work || !record || record.status !== 'completed') return state
+
+          const restoredAt = iso()
+          const completedAt = record.completedAt ?? work.completedAt ?? restoredAt
+          const snapshot = work.stageCompletionSnapshots?.[stage] ?? fallbackStageSnapshot(work, stage)
+          const restoredStages = restoreStages(snapshot, completedAt, restoredAt)
+          const sourceShipmentId = work.shipmentId
+          const restored = derive({
+            ...work,
+            status: snapshot.status,
+            shipmentId: snapshot.shipmentId,
+            completedAt: snapshot.completedAt,
+            updatedAt: restoredAt,
+            currentWorkday: dayKey(),
+            stages: restoredStages,
+            completionSnapshot: undefined,
+            stageCompletionSnapshots: keepValidStageSnapshots(work.stageCompletionSnapshots, restoredStages, stage),
+          })
+          return {
+            works: state.works.map(item => (item.id === id ? restored : item)),
+            shipments:
+              sourceShipmentId && sourceShipmentId !== snapshot.shipmentId
+                ? state.shipments.map(batch =>
+                    batch.id === sourceShipmentId ? { ...batch, workIds: batch.workIds.filter(workId => workId !== id) } : batch,
+                  )
+                : state.shipments,
+            audits: [
+              audit('work', id, '復原流程完成', `${stage} 已回到完成前狀態，計時從復原時刻接續`),
+              ...(sourceShipmentId && sourceShipmentId !== snapshot.shipmentId
+                ? [audit('shipment', sourceShipmentId, '移出已復原流程工作', `${work.displayName} 已從寄貨批次移除`)]
+                : []),
+              ...state.audits,
+            ],
           }
         }),
 
@@ -385,8 +486,14 @@ export const usePackPilotStore = create<State>()(
             const ended = new Date(input.endedAt)
             if (!Number.isFinite(started.getTime()) || !Number.isFinite(ended.getTime()) || ended <= started) return work
             const endedAt = ended.toISOString()
+            const currentStage = work.stages.find(record => record.stage === stage)
             const willCompleteWork = stage === 'moving-hallway' && input.markCompleted && work.deliveryType === 'home-delivery'
             const completionSnapshot = willCompleteWork ? snapshotFor(work) : work.completionSnapshot
+            const stageCompletionSnapshots = input.markCompleted
+              ? currentStage?.status === 'completed'
+                ? work.stageCompletionSnapshots
+                : { ...(work.stageCompletionSnapshots ?? {}), [stage]: stageSnapshotFor(work) }
+              : keepValidStageSnapshots(work.stageCompletionSnapshots, work.stages, stage)
             let stages = work.stages.map(record =>
               record.stage !== stage
                 ? record
@@ -410,6 +517,7 @@ export const usePackPilotStore = create<State>()(
               updatedAt: iso(),
               completedAt: willCompleteWork ? endedAt : work.completedAt,
               completionSnapshot,
+              stageCompletionSnapshots,
               stages,
             })
           }),
@@ -649,7 +757,7 @@ export const usePackPilotStore = create<State>()(
     }),
     {
       name: 'packpilot-data-v6-alpha-r1',
-      version: 9,
+      version: 10,
       storage: createJSONStorage(() => localStorage),
       migrate: migrateState,
       partialize: state => ({

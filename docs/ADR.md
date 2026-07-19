@@ -20,3 +20,7 @@ An Order stores its pre-completion state. Completion has a 30-second Undo path a
 
 ## ADR-007 Completed work yields screen priority
 Completed work is folded by default so active and waiting work remain visible without unnecessary scrolling. The folded header still exposes completed job count, order count, and work time.
+
+
+## ADR-008 Every completed stage is reversible
+Picking, sorting, packing, and moving home-delivery packages to the hallway each store a pre-completion snapshot. A stage-level restore returns the workflow to that snapshot, restarts any previously running timer from the restore moment, and records the action in audit history.
