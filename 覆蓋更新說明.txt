@@ -1,10 +1,15 @@
-PackPilot v0.5.2 Trial 3 覆蓋更新方式
+PackPilot v0.6.0 Alpha Revision 2 覆蓋更新方式
 
 1. 解壓縮本 ZIP。
-2. 在原 GitHub 專案資料夾中保留 .git 資料夾。
+2. 若要覆蓋既有 GitHub 專案，保留原本的 .git 資料夾。
 3. 其餘檔案以本版本全部覆蓋。
 4. 使用 GitHub Desktop Commit，再 Push origin。
 5. 等待 GitHub Actions 完成部署。
 
-此版本沿用 packpilot-data-v5-trial，並自動將舊試作資料遷移到 schema 7。
-到貨計時為當日工時事件，不會跨日接續。
+本版本沿用 packpilot-data-v6-alpha-r1 儲存位置，並將 schema 8 自動遷移到 schema 9，既有 Alpha Revision 1 現場資料會保留。
+
+主要修正：
+- 寄貨工時納入 Dashboard、工作回報與今日總工時。
+- 完成後 30 秒內可撤銷。
+- 超過 30 秒仍可從已完成清單恢復工作。
+- 已完成清單預設自動折疊，並顯示工作數、單數與工時摘要。

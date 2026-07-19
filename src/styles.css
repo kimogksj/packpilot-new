@@ -8,3 +8,24 @@
 
 /* v0.6 channel recognition and new modules */
 .work-card{border-left-width:6px}.channel-shopee{border-left-color:#ff8a34!important}.channel-myship{border-left-color:#39b86d!important}.channel-preorder{border-left-color:#9b6cff!important}.channel-boss-note{border-left-color:#4e9cff!important}.channel-ojisan{border-left-color:#e7bd4f!important}.channel-ichibansan{border-left-color:#ef6f91!important}.channel-other{border-left-color:#8d98aa!important}.shipment-panel{margin:18px 0;padding:18px;border:1px solid #2c3749;border-radius:20px;background:#0b111a}.shipment-panel .section-title{margin:0 0 14px}.shipment-panel h2{display:flex;align-items:center;gap:8px}.shipment-list{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px}.shipment-list label{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:12px;border:1px solid #2b374a;border-left-width:5px;border-radius:12px;background:#0d141f}.shipment-active{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:15px;border:1px solid #356f59;border-radius:14px;background:#10261d}.shipment-active strong,.shipment-active span{display:block}.shipment-active span{color:#9eb6aa;margin-top:4px}.event-start{display:flex;gap:8px}.event-start select,.work-editor select,.work-editor input{background:#080c13;border:1px solid #303a4c;border-radius:11px;padding:11px;color:#fff}.done{border:1px solid #2c7754!important;background:#17432f!important;color:#dff8e9!important;border-radius:12px;padding:10px 13px;font-weight:800;display:flex;align-items:center;gap:7px}.work-editor{margin:0 16px 14px}.time-editor h4,.work-editor h4{margin:0 0 12px}.primary:disabled{opacity:.4;cursor:not-allowed}@media(max-width:760px){.shipment-list{grid-template-columns:1fr}.shipment-active,.event-start{align-items:stretch;flex-direction:column}.event-start select{width:100%}.work-card footer{flex-wrap:wrap}.work-card footer .danger{margin-left:0}}
+
+/* v0.6.0 alpha.2: reporting, recovery, and completed-work folding */
+.time-summary-grid{grid-template-columns:repeat(4,1fr)}
+.time-summary-grid strong{font-size:24px;line-height:1.2}
+.time-summary-grid .total-time-card{border-color:#446ba5;background:linear-gradient(145deg,#162742,#101a2b);box-shadow:inset 0 0 0 1px #27456f}
+.undo-banner{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:18px 0;padding:15px 17px;border:1px solid #4f6f9f;border-radius:17px;background:linear-gradient(145deg,#16243a,#101722);box-shadow:0 12px 30px #0004}
+.undo-banner strong,.undo-banner span{display:block}
+.undo-banner span{margin-top:4px;color:#9cacbf;font-size:13px}
+.undo-banner button{display:flex;align-items:center;gap:7px;white-space:nowrap;border:1px solid #668bc5;border-radius:12px;padding:10px 13px;background:#213c66;color:#fff;font-weight:800}
+.restore-action{border-color:#5d79a8!important;background:#172844!important;color:#dce9ff!important}
+.completed-section{margin-top:28px}
+.completed-toggle{width:100%;display:grid;grid-template-columns:minmax(220px,1fr) auto auto;gap:16px;align-items:center;padding:17px 18px;border:1px solid #2c3749;border-radius:18px;background:#0b1119;color:#fff;text-align:left}
+.completed-toggle>div:first-child strong,.completed-toggle>div:first-child span{display:block}
+.completed-toggle>div:first-child strong{font-size:18px}
+.completed-toggle>div:first-child span{margin-top:4px;color:#8290a3;font-size:13px}
+.completed-summary{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.completed-summary b{padding:7px 10px;border:1px solid #2e3b4f;border-radius:999px;background:#121a27;color:#b9c6d8;font-size:13px;font-weight:700}
+.completed-stack{margin-top:12px}
+
+@media(max-width:900px){.time-summary-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:760px){.undo-banner{align-items:stretch;flex-direction:column}.undo-banner button{justify-content:center}.completed-toggle{grid-template-columns:1fr auto}.completed-summary{grid-column:1/-1;grid-row:2;justify-content:flex-start}.time-summary-grid strong{font-size:21px}}
